@@ -1,0 +1,11 @@
+{
+  "extends": "@borderless/ts-scripts/configs/tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2020",
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node", "jest"],
+    "jsx": "react"
+  },
+  "include": ["./src/**/*"]
+}

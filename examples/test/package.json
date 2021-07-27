@@ -1,0 +1,15 @@
+{
+  "type": "module",
+  "scripts": {
+    "build": "site build",
+    "dev": "site dev",
+    "start": "node --loader ts-node/esm index.ts"
+  },
+  "dependencies": {
+    "@borderless/site": "file:../.."
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.12",
+    "express": "^4.17.1"
+  }
+}
