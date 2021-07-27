@@ -67,6 +67,13 @@ Useful scripts are in `package.json` under scripts. You can build, test, and for
 npm run example:test -- dev
 ```
 
+## Inspiration
+
+- [Next.js](https://nextjs.org)
+- [Flareact](https://flareact.com)
+- [Vite SSR example](https://github.com/vitejs/vite/tree/98d95e3e11bbc43e410b213b682e315b9344d2d7/packages/playground/ssr-react)
+- [Microsite](https://github.com/natemoo-re/microsite)
+
 ## TypeScript
 
 This project is written using [TypeScript](https://github.com/Microsoft/TypeScript) and publishes the definitions directly to NPM.

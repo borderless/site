@@ -1,7 +1,7 @@
 import { watch } from "chokidar";
 import reactRefresh from "@vitejs/plugin-react-refresh";
 import { resolve, relative } from "node:path";
-import { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { URL } from "node:url";
 import { writeFile } from "node:fs/promises";
 import {
@@ -354,7 +354,7 @@ export interface DevOptions extends ListOptions {
 /**
  * Create a local dev environment with HMR and React Refresh support.
  */
-export async function dev(options: DevOptions) {
+export async function dev(options: DevOptions): Promise<RequestListener> {
   type Context = Record<string, never>;
 
   const cwd = resolve(options.root, options.src);
@@ -402,7 +402,7 @@ export async function dev(options: DevOptions) {
     return Object.fromEntries(
       Object.entries(pages).map<[string, ServerPage<P, Context>]>(
         ([route, path]) => {
-          return [route, loadServerPage(path)!];
+          return [route, loadServerPage(path)];
         }
       )
     );
