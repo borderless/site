@@ -385,8 +385,6 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     server: { middlewareMode: "ssr" },
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
   const loadServerModule = <P>(path: string): ServerComponent<P> => {
     return { module: load(vite, path) };
   };
