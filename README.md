@@ -24,17 +24,17 @@ npm install @borderless/site --save-dev
 
 ## Usage
 
-Commands:
-
-- `dev` Run a local development server with HMR
-- `build` Generate client and server-side compatible bundles
-- `list` List the pages in your SSR app
-
 Options:
 
 - `--root` Project root directory (default: `process.cwd()`)
 - `--src` Directory to read source files (default: `src`)
 - `--public-dir` Directory to serve as plain static assets (default: `public`)
+
+Commands:
+
+- `dev` Run a local development server with HMR
+- `build` Generate client and server-side compatible bundles
+- `list` List the pages in your SSR app
 
 ### Dev
 
