@@ -96,15 +96,17 @@ Build client and server-side bundles for deploying to a production environment.
  * Run a local development server with hot reload support.
  */
 async function $dev(argv: string[], options: Options) {
-  const { "--port": port = 8000, "--help": help = false } = arg(
-    { "--port": Number, "--help": Boolean },
-    { argv }
-  );
+  const {
+    "--port": port = 8000,
+    "--host": host = "127.0.0.1",
+    "--help": help = false,
+  } = arg({ "--port": Number, "--host": String, "--help": Boolean }, { argv });
 
   if (help) {
     return console.log(`
 Run a local development server with hot reload support.
 
+--host  Specify the host to run on (default: 127.0.0.1)
 --port  Specify the port to run on (default: 8000)
 `);
   }
@@ -117,8 +119,8 @@ Run a local development server with hot reload support.
 
   const server = createServer(handler);
 
-  server.listen(port, () =>
-    console.log(`Server running at http://localhost:${port}`)
+  server.listen(port, host, () =>
+    console.log(`Server running at http://${host}:${port}`)
   );
 
   return new Promise<void>((resolve, reject) => {

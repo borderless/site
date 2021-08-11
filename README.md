@@ -42,6 +42,7 @@ Run a local development server with hot reload support
 
 Options:
 
+- `--host` Specify the host to run on (default: `127.0.0.1`)
 - `--port` Specify the port to run on (default: `8000`)
 
 ### Build
