@@ -1,5 +1,5 @@
 import React from "react";
-import Head from "../head.js";
+import Head from "./head.js";
 
 export interface NotFoundProps {}
 
@@ -21,9 +21,8 @@ export default function NotFound(props: NotFoundProps) {
             cssText: `html,body,#__SITE__{height:100%;margin:0}`,
           },
         ]}
-      >
-        <title>Page not found</title>
-      </Head>
+        title="Page not found"
+      />
       <main
         style={{
           display: "flex",

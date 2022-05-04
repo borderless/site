@@ -1,5 +1,5 @@
 import { watch } from "chokidar";
-import reactRefresh from "@vitejs/plugin-react-refresh";
+import react from "@vitejs/plugin-react";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { URL } from "node:url";
@@ -16,8 +16,10 @@ import {
   Request,
   Response,
   Server,
-  ServerComponent,
+  AppModule,
+  DocumentModule,
   ServerPage,
+  ServerFile,
 } from "./index.js";
 
 /**
@@ -28,9 +30,9 @@ const EXTENSIONS = ["js", "jsx", "ts", "tsx"];
 /**
  * Path to import default `App` for client-side rendering.
  */
-const SITE_COMPONENT_APP_MODULE_ID = "@borderless/site/components/app";
+const SITE_COMPONENT_APP_MODULE_ID = "@borderless/site/app";
 const SITE_MODULE_ID = "@borderless/site";
-const SITE_CLIENT_MODULE_ID = "@borderless/site/render/client";
+const SITE_CLIENT_MODULE_ID = "@borderless/site/client";
 
 /**
  * Shared vite config.
@@ -65,14 +67,12 @@ function buildPageScript(
   pagePath: string,
   mode: string
 ): string {
-  const renderMode = mode === "production" ? "hydrate" : "render";
-
   return [
-    `import ReactDOM from "react-dom"`,
-    `import { renderClient } from ${JSON.stringify(SITE_CLIENT_MODULE_ID)};`,
+    `import ReactDOM from "react-dom/client";`,
+    `import { render } from ${JSON.stringify(SITE_CLIENT_MODULE_ID)};`,
     `import Component from ${JSON.stringify(pagePath)};`,
-    `import App from ${JSON.stringify(appPath)}`,
-    `renderClient(App, Component, ReactDOM.${renderMode})`,
+    `import App from ${JSON.stringify(appPath)};`,
+    `render(App, Component, ${JSON.stringify(mode)});`,
   ].join("\n");
 }
 
@@ -138,7 +138,7 @@ function buildServerDts() {
   return [
     `import { Server } from ${JSON.stringify(SITE_MODULE_ID)};`,
     ``,
-    `export declare const server: Server;`,
+    `export declare const server: Server<unknown>;`,
   ].join("\n");
 }
 
@@ -187,7 +187,7 @@ function clientViteConfig(options: ClientConfig) {
           }
         },
       },
-      options.mode === "development" ? reactRefresh() : undefined,
+      options.mode === "development" ? react() : undefined,
     ] as PluginOption[],
     build: {
       sourcemap: sourceMap,
@@ -294,14 +294,17 @@ export async function build(options: BuildOptions): Promise<undefined> {
     },
   });
 
-  const serverResult = await buildVite({
+  const result = await buildVite({
     ...DEFAULT_VITE_CONFIG,
     root: options.root,
     base: options.base,
     build: {
-      target: "modules",
+      target: "es2020",
       rollupOptions: {
         input: { server: SITE_SERVER_MODULE_ID },
+        output: {
+          format: "esm"
+        },
         plugins: [
           {
             name: "site-server-entry",
@@ -325,9 +328,12 @@ export async function build(options: BuildOptions): Promise<undefined> {
       outDir: serverOutDir,
       ssr: true,
     },
-  });
+    optimizeDeps: {
+      include: [],
+    },
+  }) as RollupOutput;
 
-  const serverOutput = (serverResult as RollupOutput).output.find(
+  const serverOutput = result.output.find(
     (x) => x.type === "chunk" && x.facadeModuleId === SITE_SERVER_MODULE_ID
   );
 
@@ -341,8 +347,8 @@ export async function build(options: BuildOptions): Promise<undefined> {
     buildServerDts()
   );
 
-  // Ensure the `server.js` file is loaded as CommonJS, can't get ESM output from vite.
-  await writeFile(resolve(serverOutDir, "package.json"), `{"type":"commonjs"}`);
+  // Ensure the `server.js` file is loaded as ESM.
+  await writeFile(resolve(serverOutDir, "package.json"), `{"type":"module"}`);
 
   return undefined;
 }
@@ -385,7 +391,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     server: { middlewareMode: "ssr" },
   });
 
-  const loadServerModule = <P>(path: string): ServerComponent<P> => {
+  const loadServerModule = <P>(path: string): ServerFile<P> => {
     return { module: load(vite, path) };
   };
 
@@ -413,8 +419,8 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
       pages: loadPages(list.pages),
       error: list.error ? loadServerPage(list.error) : undefined,
       notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
-      app: list.app ? loadServerModule(list.app) : undefined,
-      document: list.document ? loadServerModule(list.document) : undefined,
+      app: list.app ? loadServerModule<AppModule<{}>>(list.app) : undefined,
+      document: list.document ? loadServerModule<DocumentModule>(list.document) : undefined,
     });
 
     return cachedSite;
@@ -428,15 +434,14 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   getSite();
 
   // The server gets dynamic site instances and injects the Vite transform into HTML.
-  const server = async (req: Request, url: string): Promise<Response> => {
+  const server = async (req: Request, url: string): Promise<{ status: number; headers: ReadonlyMap<string, string>; text: string }> => {
     const site = getSite();
     const response = await site(req, {});
-    if (response.headers.get("content-type") !== "text/html") return response;
 
-    // Wrap generated HTML with Vite for HMR.
     return {
-      ...response,
-      text: await vite.transformIndexHtml(url, response.text),
+      status: response.status,
+      headers: response.headers,
+      text: response.body ? response.headers.get("content-type") === "text/html" ? await vite.transformIndexHtml(url, response.body.text()) : response.body.text() : "",
     };
   };
 
@@ -463,7 +468,8 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
           for (const [key, value] of response.headers) {
             res.setHeader(key, value);
           }
-          res.end(response.text);
+          res.write(response.text);
+          res.end();
         })
         .catch((err) => {
           res.statusCode = 500;

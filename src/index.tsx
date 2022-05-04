@@ -1,20 +1,15 @@
 import React from "react";
-import ReactDOM from "react-dom/server.js";
+import * as ReactDOM from "react-dom/server";
 import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
-import AppComponent, { AppProps } from "./components/app.js";
-import DocumentComponent, { DocumentProps } from "./components/document.js";
-import NotFoundComponent from "./components/404.js";
+import AppComponent, { AppProps } from "./app.js";
+import renderDocument, { DocumentOptions } from "./document.js";
+import NotFoundComponent from "./404.js";
 import ErrorComponent, {
   getServerSideProps as getServerSidePropsError,
-} from "./components/error.js";
-import { renderApp } from "./render/client.js";
-import { renderDocument } from "./render/server.js";
-
-/**
- * HTML doctype prefix, can't be rendered in React.
- */
-const HTML_DOCTYPE = "<!doctype html>";
+} from "./error.js";
+import { AppContext, GLOBAL_PAGE_DATA, renderApp, PageData } from "./shared.js";
+import { FilledContext } from "react-helmet-async";
 
 /**
  * Simple `Request` interface for rendering a page.
@@ -25,13 +20,17 @@ export interface Request {
   headers: ReadonlyMap<string, string | string[] | undefined>;
 }
 
+export interface Body {
+  text(): string;
+}
+
 /**
  * Simple `Response` interface for returning site pages.
  */
 export interface Response {
   status: number;
   headers: ReadonlyMap<string, string>;
-  text: string;
+  body: Body | null;
 }
 
 /**
@@ -82,8 +81,12 @@ export interface PageModule<P, C> {
 /**
  * Server-side only modules don't support `getServerSideProps`.
  */
-export interface ServerModule<P> {
-  default?: React.ComponentType<P>;
+export interface AppModule<P> {
+  default: React.ComponentType<AppProps<P>>;
+}
+
+export interface DocumentModule {
+  default: (options: DocumentOptions) => [string, string];
 }
 
 /**
@@ -94,8 +97,8 @@ export type ServerLoader<T> = T | Promise<T> | (() => T | Promise<T>);
 /**
  * Server-side only components.
  */
-export interface ServerComponent<P> {
-  module: ServerLoader<ServerModule<P>>;
+export interface ServerFile<T> {
+  module: ServerLoader<T>;
 }
 
 /**
@@ -103,7 +106,7 @@ export interface ServerComponent<P> {
  */
 export interface ServerPage<P, C> {
   module: ServerLoader<PageModule<P, C>>;
-  url?: string;
+  url: string | undefined;
 }
 
 /**
@@ -113,8 +116,8 @@ export interface ServerOptions<C> {
   pages: Record<string, ServerPage<{}, C>>;
   error?: ServerPage<{}, C>;
   notFound?: ServerPage<{}, C>;
-  app?: ServerComponent<AppProps<{}>>;
-  document?: ServerComponent<DocumentProps>;
+  app?: ServerFile<AppModule<{}>>;
+  document?: ServerFile<DocumentModule>;
 }
 
 /**
@@ -173,7 +176,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     ? {
         module: fn(options.document.module),
       }
-    : { module: fn({ default: DocumentComponent }) };
+    : { module: fn({ default: renderDocument }) };
 
   return async function server(request, context) {
     const pathname = request.pathname.slice(1);
@@ -265,15 +268,14 @@ async function getServerSideProps<P, C>(
 /**
  * Server render the page.
  */
-function render<P, C>(
-  document: ServerModule<DocumentProps>,
-  app: ServerModule<AppProps<P>>,
+async function render<P, C>(
+  document: DocumentModule,
+  app: AppModule<P>,
   page: PageModule<P, C>,
   serverSideProps: ServerSideProps<P>,
   initialStatus: number,
   route: Route<P, C>
-): Response {
-  const helmetContext = { helmet: {} };
+): Promise<Response> {
   const { key, scriptUrl } = route;
   const { props, redirect, status, headers } = serverSideProps;
 
@@ -282,40 +284,22 @@ function render<P, C>(
     return {
       status: status ?? 302,
       headers: new Map([...(headers || []), ["location", redirect.url]]),
-      text: "",
+      body: null,
     };
   }
 
   const AppComponent = require(app.default, `The "_app" module is missing a default export`);
-  const DocumentComponent = require(document.default, `The "_document" module is missing a default export`);
   const Component = require(page.default, `The page for "${key}" module is missing a default export`);
+  const template = require(document.default, `The "_document" module is missing a default export`);
 
-  const appElement = renderApp<P>(
-    AppComponent,
-    {
-      Component,
-      props,
-    },
-    {
-      helmetContext,
-    }
-  );
-
-  // Render the document using the collected context and HTML.
-  const documentElement = renderDocument(
-    DocumentComponent,
-    {},
-    {
-      html: ReactDOM.renderToString(appElement),
-      helmet: helmetContext.helmet,
-      hydrate: { scriptUrl, props },
-    }
-  );
+  const appProps: AppProps<P> = { Component, props };
+  const appContext: AppContext = { helmetContext: { helmet: {} } };
+  const appElement = renderApp<P>(AppComponent, appProps, appContext);
 
   return {
     status: status ?? initialStatus,
     headers: new Map([...(headers || []), ["content-type", "text/html"]]),
-    text: HTML_DOCTYPE + ReactDOM.renderToStaticMarkup(documentElement),
+    body: new ReactBody(appElement, template, props, appContext, scriptUrl),
   };
 }
 
@@ -334,7 +318,7 @@ function decode(value: string): string {
  * Turn value into function, but keep existing function as a function.
  */
 function fn<T extends object>(value: T | (() => T)): () => T {
-  return typeof value === "function" ? value : () => value;
+  return typeof value === "function" ? (value as () => T) : () => value;
 }
 
 /**
@@ -343,4 +327,47 @@ function fn<T extends object>(value: T | (() => T)): () => T {
 function require<T>(value: T | null | undefined, message: string): T {
   if (value == null) throw new TypeError(message);
   return value;
+}
+
+class ReactBody<P> implements Body {
+  constructor(
+    private app: JSX.Element,
+    private template: (options: DocumentOptions) => [string, string],
+    private props: P,
+    private context: AppContext,
+    private scriptUrl: string | undefined
+  ) {}
+
+  getDocumentOptions(): DocumentOptions {
+    const { helmet } = this.context.helmetContext as FilledContext;
+
+    const htmlAttributes = helmet.htmlAttributes.toString();
+    const bodyAttributes = helmet.bodyAttributes.toString();
+    let head = "";
+    let script = "";
+
+    head += helmet.title.toString();
+    head += helmet.priority.toString();
+    head += helmet.base.toString();
+    head += helmet.meta.toString();
+    head += helmet.link.toString();
+    head += helmet.style.toString();
+    head += helmet.script.toString();
+
+    if (this.scriptUrl) {
+      const data: PageData = { props: this.props };
+      const content = JSON.stringify(data).replace(/\<(!--|script|\/script)/gi, "<\\$1");
+
+      script += `<script>window.${GLOBAL_PAGE_DATA}=${content}</script>`;
+      script += `<script type="module" src="${this.scriptUrl}"></script>`;
+    }
+
+    return { htmlAttributes, bodyAttributes, head, script };
+  }
+
+  text() {
+    const content = ReactDOM.renderToString(this.app);
+    const [prefix, suffix] = this.template(this.getDocumentOptions());
+    return prefix + content + suffix;
+  }
 }
