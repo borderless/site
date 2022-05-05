@@ -21,6 +21,9 @@ import {
 import type { RollupOutput, OutputChunk } from "rollup";
 import type { Request } from "./index.js";
 
+const DEFAULT_CLIENT_TARGET = "es2016";
+const DEFAULT_SERVER_TARGET = "es2019";
+
 /**
  * Support entry point file extensions.
  */
@@ -145,21 +148,23 @@ function buildServerDts() {
 export interface ClientConfig {
   // Root directory of the project, usually contains the `src` and `dist` directories.
   root: string;
+  // Supported client target versions, e.g. es2016.
+  target: string;
   // Build mode, `production` or `development`.
   mode: "production" | "development";
   // All files used to build the client.
   files: List;
   // The public directory to serve static assets from.
-  publicDir: string;
+  publicDir: string | undefined;
   // Enable source map in output.
-  sourceMap: boolean;
+  sourceMap: boolean | undefined;
 }
 
 /**
  * Generate the vite configuration for supporting client side rendering.
  */
 function clientViteConfig(options: ClientConfig) {
-  const { mode, root, files, publicDir, sourceMap } = options;
+  const { mode, root, files, publicDir } = options;
   const appPath = files.app ?? SITE_COMPONENT_APP_IMPORT_NAME;
   const pagePaths = Object.values(files.pages);
 
@@ -190,7 +195,8 @@ function clientViteConfig(options: ClientConfig) {
       options.mode === "development" ? react() : undefined,
     ] as PluginOption[],
     build: {
-      sourcemap: sourceMap,
+      target: options.target,
+      sourcemap: options.sourceMap,
       rollupOptions: {
         input: pagePaths.map((x) => vitePageEntry(options.root, x)),
       },
@@ -261,12 +267,16 @@ export async function list(options: ListOptions): Promise<List> {
 }
 
 export interface BuildOptions extends ListOptions {
-  base: string;
-  sourceMap: boolean;
-  publicDir: string;
-  out: {
-    server: string;
-    client: string;
+  base?: string;
+  sourceMap?: boolean;
+  publicDir?: string;
+  client?: {
+    target?: string;
+    outDir?: string;
+  };
+  server?: {
+    target?: string;
+    outDir?: string;
   };
 }
 
@@ -274,21 +284,24 @@ export interface BuildOptions extends ListOptions {
  * Build client and server compatible bundles.
  */
 export async function build(options: BuildOptions): Promise<undefined> {
-  const clientOutDir = resolve(options.root, options.out.client);
-  const serverOutDir = resolve(options.root, options.out.server);
+  const { client = {}, server = {}, base = "/", root } = options;
+
+  const clientOutDir = resolve(options.root, client.outDir ?? "dist/client");
+  const serverOutDir = resolve(options.root, server.outDir ?? "dist/server");
   const files = await list(options);
 
   const viteConfig = clientViteConfig({
     root: options.root,
     files: files,
     mode: "production",
+    target: client.target ?? DEFAULT_CLIENT_TARGET,
     publicDir: options.publicDir,
     sourceMap: options.sourceMap,
   });
 
   const clientResult = (await buildVite({
     ...viteConfig,
-    base: options.base,
+    base,
     build: {
       ...viteConfig.build,
       outDir: clientOutDir,
@@ -297,9 +310,9 @@ export async function build(options: BuildOptions): Promise<undefined> {
 
   const result = (await buildVite({
     ...DEFAULT_VITE_CONFIG,
-    root: options.root,
+    root,
     build: {
-      target: "es2019",
+      target: server.target ?? DEFAULT_SERVER_TARGET,
       rollupOptions: {
         input: { server: SITE_SERVER_MODULE_ID },
         output: {
@@ -315,12 +328,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
             },
             load(id) {
               if (id === SITE_SERVER_MODULE_ID) {
-                return buildServerScript(
-                  options.root,
-                  options.base,
-                  files,
-                  clientResult
-                );
+                return buildServerScript(root, base, files, clientResult);
               }
             },
           },
@@ -355,19 +363,23 @@ export async function build(options: BuildOptions): Promise<undefined> {
 }
 
 export interface DevOptions extends ListOptions {
-  publicDir: string;
+  target?: string;
+  publicDir?: string;
 }
+
+/**
+ * Context for the dev server requests.
+ */
+type DevServerContext = Record<string, never>;
 
 /**
  * Create a local dev environment with HMR and React Refresh support.
  */
 export async function dev(options: DevOptions): Promise<RequestListener> {
-  type Context = Record<string, never>;
-
   const cwd = resolve(options.root, options.src);
   const files = new Set<string>();
   const watcher = getChokidar(cwd);
-  let cachedSite: Server<Context> | undefined = undefined;
+  let cachedSite: Server<DevServerContext> | undefined = undefined;
 
   watcher.on("add", (path) => {
     files.add(path);
@@ -383,6 +395,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     root: options.root,
     files: filesToList(cwd, files),
     mode: "development",
+    target: options.target ?? DEFAULT_CLIENT_TARGET,
     publicDir: options.publicDir,
     sourceMap: true,
   });
@@ -396,16 +409,16 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     return { module: load(vite, path) } as ServerFile<P>;
   };
 
-  const loadServerPage = <P>(path: string): ServerPage<P, Context> => {
+  const loadServerPage = <P>(path: string): ServerPage<P, DevServerContext> => {
     return {
       url: vitePageEntry(options.root, path),
       module: load(vite, path),
-    } as ServerPage<P, Context>;
+    } as ServerPage<P, DevServerContext>;
   };
 
   const loadPages = <P>(pages: Record<string, string>) => {
     return Object.fromEntries(
-      Object.entries(pages).map<[string, ServerPage<P, Context>]>(
+      Object.entries(pages).map<[string, ServerPage<P, DevServerContext>]>(
         ([route, path]) => {
           return [route, loadServerPage(path)];
         }

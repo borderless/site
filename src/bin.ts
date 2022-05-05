@@ -55,16 +55,20 @@ Lists the files used to build the project. The pages are all in root and follow 
  */
 async function $build(argv: string[], options: Options) {
   const {
-    "--base": base = "/",
-    "--out-client": outClient = "dist/client",
-    "--out-server": outServer = "dist/server",
-    "--source-map": sourceMap = false,
-    "--help": help = false,
+    "--base": base,
+    "--client-target": clientTarget,
+    "--server-target": serverTarget,
+    "--client-outdir": clientOutDir,
+    "--server-outdir": serverOutDir,
+    "--source-map": sourceMap,
+    "--help": help,
   } = arg(
     {
       "--base": String,
-      "--out-server": String,
-      "--out-client": String,
+      "--server-outdir": String,
+      "--client-outdir": String,
+      "--server-target": String,
+      "--client-target": String,
       "--source-map": Boolean,
       "--help": Boolean,
     },
@@ -75,10 +79,12 @@ async function $build(argv: string[], options: Options) {
     return console.log(`
 Build client and server-side bundles for deploying to a production environment.
 
---base        Base public path when built in production (default: "/")
---out-client  Output directory for client files relative to root (default: "dist/client")
---out-client  Output directory for server files relative to root (default: "dist/server")
---source-map  Generate production source maps (default: false)
+--base           Base public path when built in production (default: "/")
+--client-target  Targetted ES version for the client files (default: "es2016")
+--server-target  Targetted ES version for the server files (default: "es2019")
+--client-outdir  Output directory for client files relative to root (default: "dist/client")
+--server-outdir  Output directory for server files relative to root (default: "dist/server")
+--source-map     Generate production source maps (default: false)
 `);
   }
 
@@ -88,7 +94,14 @@ Build client and server-side bundles for deploying to a production environment.
     src: options.src,
     root: options.root,
     publicDir: options.publicDir,
-    out: { server: outServer, client: outClient },
+    server: {
+      target: serverTarget,
+      outDir: serverOutDir,
+    },
+    client: {
+      target: clientTarget,
+      outDir: clientOutDir,
+    },
   });
 }
 

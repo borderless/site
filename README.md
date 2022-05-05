@@ -52,8 +52,8 @@ Build client and server-side bundles for deploying to a production environment.
 Options:
 
 - `--base` Base public path when built in production (default: `/`)
-- `--out-client` Output directory for client files relative to root (default: `dist/client`)
-- `--out-client` Output directory for server files relative to root (default: `dist/server`)
+- `--client-outdir` Output directory for client files relative to root (default: `dist/client`)
+- `--server-outdir` Output directory for server files relative to root (default: `dist/server`)
 - `--source-map` Generate production source maps (default: `false`)
 
 ### List
