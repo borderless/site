@@ -1,12 +1,16 @@
 {
   "type": "module",
+  "main": "./worker.js",
   "scripts": {
     "build": "site build",
     "dev": "site dev",
+    "wrangler:dev": "wrangler dev",
+    "wrangler:login": "wrangler login",
     "start": "node --loader ts-node/esm index.ts"
   },
   "dependencies": {
-    "@borderless/site": "file:../.."
+    "@borderless/site": "file:../..",
+    "@cloudflare/wrangler": "^1.19.12"
   },
   "devDependencies": {
     "@types/express": "^4.17.12",

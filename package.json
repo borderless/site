@@ -45,6 +45,9 @@
     "specs": "ts-scripts specs",
     "test": "ts-scripts test"
   },
+  "browser": {
+    "stream": null
+  },
   "files": [
     "dist/"
   ],

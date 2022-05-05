@@ -10,7 +10,7 @@ import ErrorComponent, {
 } from "./error.js";
 import { AppContext, GLOBAL_PAGE_DATA, renderApp, PageData } from "./shared.js";
 import { FilledContext } from "react-helmet-async";
-import { PassThrough, Readable } from "node:stream";
+import { PassThrough } from "stream";
 import type { ServerSideProps, ServerSidePropsContext, GetServerSideProps, Request } from "./index.js";
 
 export type OnError = (error: unknown) => void;
@@ -27,11 +27,17 @@ export interface NodeStreamOptions {
   signal?: AbortSignal;
 }
 
+export interface ReadableStreamOptions {
+  onError?: OnError;
+  signal?: AbortSignal;
+}
+
 /**
  * Supported body interfaces.
  */
 export interface Body {
   nodeStream(options?: NodeStreamOptions): Promise<NodeStream>;
+  readableStream(options?: ReadableStreamOptions): Promise<ReadableStream>;
   text(): string;
 }
 
@@ -345,6 +351,19 @@ class ReactBody<P> implements Body {
     }
 
     return { htmlAttributes, bodyAttributes, head, script };
+  }
+
+  async readableStream(options: ReadableStreamOptions = {}): Promise<ReadableStream> {
+    const { signal, onError = logger } = options;
+    const {readable, writable} = new TransformStream();
+    const stream = await ReactDOM.renderToReadableStream(this.app, { signal, onError });
+    const [prefix, suffix] = this.template(this.getDocumentOptions());
+    writable.getWriter().write(prefix);
+    stream.pipeTo(writable, { preventClose: true }).then(() => {
+      const writer = writable.getWriter();
+      return writer.write(suffix).then(() => writer.close());
+    }).catch(err => onError?.(err));
+    return readable;
   }
 
   nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {

@@ -80,6 +80,7 @@ function buildPageScript(
  */
 function buildServerScript(
   root: string,
+  base: string,
   files: List,
   clientResult: RollupOutput
 ): string {
@@ -97,7 +98,7 @@ function buildServerScript(
     const entry = vitePageEntry(root, path);
     const clientUrl = clientPages.get(entry);
     if (!clientUrl) throw new TypeError(`Unable to load entry: ${entry}`);
-    return clientUrl;
+    return base + clientUrl;
   };
 
   const stringifyModule = (path: string | undefined) => {
@@ -287,18 +288,18 @@ export async function build(options: BuildOptions): Promise<undefined> {
 
   const clientResult = await buildVite({
     ...viteConfig,
+    base: options.base,
     build: {
       ...viteConfig.build,
       outDir: clientOutDir,
     },
-  });
+  }) as RollupOutput;
 
   const result = await buildVite({
     ...DEFAULT_VITE_CONFIG,
     root: options.root,
-    base: options.base,
     build: {
-      target: "es2020",
+      target: "es2019",
       rollupOptions: {
         input: { server: SITE_SERVER_MODULE_ID },
         output: {
@@ -316,8 +317,9 @@ export async function build(options: BuildOptions): Promise<undefined> {
               if (id === SITE_SERVER_MODULE_ID) {
                 return buildServerScript(
                   options.root,
+                  options.base,
                   files,
-                  clientResult as RollupOutput
+                  clientResult
                 );
               }
             },

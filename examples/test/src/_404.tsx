@@ -1,5 +1,5 @@
 import React from "react";
-import type { ServerSidePropsContext } from "@borderless/site/server";
+import type { ServerSidePropsContext } from "@borderless/site";
 
 export default function NotFound() {
   return <>An example of a custom 404 page.</>;
