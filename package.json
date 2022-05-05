@@ -45,9 +45,6 @@
     "specs": "ts-scripts specs",
     "test": "ts-scripts test"
   },
-  "browser": {
-    "stream": null
-  },
   "files": [
     "dist/"
   ],
@@ -85,6 +82,9 @@
     "typescript": "^4.3.4"
   },
   "types": "./dist/index.d.ts",
+  "browser": {
+    "stream": null
+  },
   "ts-scripts": {
     "project": [
       "tsconfig.build.json"

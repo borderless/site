@@ -12,6 +12,6 @@ export default function template(options: DocumentOptions): [string, string] {
 
   return [
     `<!doctype html><html${htmlAttributes}><head>${head}</head><body${bodyAttributes}><div id=${PAGE_ELEMENT_ID}>`,
-    `</div>${script}</body></html>`
+    `</div>${script}</body></html>`,
   ];
 }

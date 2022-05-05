@@ -286,16 +286,16 @@ export async function build(options: BuildOptions): Promise<undefined> {
     sourceMap: options.sourceMap,
   });
 
-  const clientResult = await buildVite({
+  const clientResult = (await buildVite({
     ...viteConfig,
     base: options.base,
     build: {
       ...viteConfig.build,
       outDir: clientOutDir,
     },
-  }) as RollupOutput;
+  })) as RollupOutput;
 
-  const result = await buildVite({
+  const result = (await buildVite({
     ...DEFAULT_VITE_CONFIG,
     root: options.root,
     build: {
@@ -303,7 +303,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
       rollupOptions: {
         input: { server: SITE_SERVER_MODULE_ID },
         output: {
-          format: "esm"
+          format: "esm",
         },
         plugins: [
           {
@@ -332,7 +332,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
     optimizeDeps: {
       include: [],
     },
-  }) as RollupOutput;
+  })) as RollupOutput;
 
   const serverOutput = result.output.find(
     (x) => x.type === "chunk" && x.facadeModuleId === SITE_SERVER_MODULE_ID
@@ -393,14 +393,14 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   });
 
   const loadServerModule = <P>(path: string): ServerFile<P> => {
-    return { module: load(vite, path) };
+    return { module: load(vite, path) } as ServerFile<P>;
   };
 
   const loadServerPage = <P>(path: string): ServerPage<P, Context> => {
     return {
       url: vitePageEntry(options.root, path),
       module: load(vite, path),
-    };
+    } as ServerPage<P, Context>;
   };
 
   const loadPages = <P>(pages: Record<string, string>) => {
@@ -420,8 +420,10 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
       pages: loadPages(list.pages),
       error: list.error ? loadServerPage(list.error) : undefined,
       notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
-      app: list.app ? loadServerModule<AppModule<{}>>(list.app) : undefined,
-      document: list.document ? loadServerModule<DocumentModule>(list.document) : undefined,
+      app: list.app ? loadServerModule<AppModule<object>>(list.app) : undefined,
+      document: list.document
+        ? loadServerModule<DocumentModule>(list.document)
+        : undefined,
     });
 
     return cachedSite;
@@ -435,14 +437,25 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   getSite();
 
   // The server gets dynamic site instances and injects the Vite transform into HTML.
-  const server = async (req: Request, url: string): Promise<{ status: number; headers: ReadonlyMap<string, string>; text: string }> => {
+  const server = async (
+    req: Request,
+    url: string
+  ): Promise<{
+    status: number;
+    headers: ReadonlyMap<string, string>;
+    text: string;
+  }> => {
     const site = getSite();
     const response = await site(req, {});
 
     return {
       status: response.status,
       headers: response.headers,
-      text: response.body ? response.headers.get("content-type") === "text/html" ? await vite.transformIndexHtml(url, response.body.text()) : response.body.text() : "",
+      text: response.body
+        ? response.headers.get("content-type") === "text/html"
+          ? await vite.transformIndexHtml(url, response.body.text())
+          : response.body.text()
+        : "",
     };
   };
 
@@ -486,5 +499,5 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
  * Use `vite.ssrLoadModule` for hot reloading and import resolution.
  */
 function load(vite: ViteDevServer, path: string) {
-  return () => vite.ssrLoadModule(path) as Promise<any>;
+  return () => vite.ssrLoadModule(path) as Promise<unknown>;
 }

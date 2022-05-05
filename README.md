@@ -70,9 +70,9 @@ npm run example:test -- dev
 
 Test pages:
 
-* [Homepage with hydration](http://127.0.0.1:8000)
-* [404 page](http://127.0.0.1:8000/404)
-* [URL decoding and `<script />` encoding](http://127.0.0.1:8000/echo/%3C%2Fscript%3E%3Cscript%3Ealert('test')%3C%2Fscript%3E)
+- [Homepage with hydration](http://127.0.0.1:8000)
+- [404 page](http://127.0.0.1:8000/404)
+- [URL decoding and `<script />` encoding](<http://127.0.0.1:8000/echo/%3C%2Fscript%3E%3Cscript%3Ealert('test')%3C%2Fscript%3E>)
 
 ## Inspiration
 

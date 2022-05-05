@@ -11,7 +11,12 @@ import ErrorComponent, {
 import { AppContext, GLOBAL_PAGE_DATA, renderApp, PageData } from "./shared.js";
 import { FilledContext } from "react-helmet-async";
 import { PassThrough } from "stream";
-import type { ServerSideProps, ServerSidePropsContext, GetServerSideProps, Request } from "./index.js";
+import type {
+  ServerSideProps,
+  ServerSidePropsContext,
+  GetServerSideProps,
+  Request,
+} from "./index.js";
 
 export type OnError = (error: unknown) => void;
 
@@ -210,18 +215,20 @@ function createPageRouter<C>(
   pages: Record<string, ServerPage<{}, C>>
 ): (pathname: string) => Route<{}, C> | undefined {
   const routes = new Map(
-    Object.entries(pages).map(([key, contents]): [
-      string,
-      Pick<Route<{}, C>, "module" | "scriptUrl">
-    ] => {
-      return [
-        key,
-        {
-          module: fn(contents.module),
-          scriptUrl: contents.url,
-        },
-      ];
-    })
+    Object.entries(pages).map(
+      ([key, contents]): [
+        string,
+        Pick<Route<{}, C>, "module" | "scriptUrl">
+      ] => {
+        return [
+          key,
+          {
+            module: fn(contents.module),
+            scriptUrl: contents.url,
+          },
+        ];
+      }
+    )
   );
 
   const router = createRouter(routes.keys());
@@ -312,7 +319,10 @@ function require<T>(value: T | null | undefined, message: string): T {
 /**
  * Default fallback for error handling.
  */
-const logger = process.env.NODE_ENV === "production" ? undefined : (err: unknown) => console.error(err)
+const logger =
+  process.env.NODE_ENV === "production"
+    ? undefined
+    : (err: unknown) => console.error(err);
 
 /**
  * React body renderer that supports multiple ways of returning the application.
@@ -344,7 +354,10 @@ class ReactBody<P> implements Body {
 
     if (this.scriptUrl) {
       const data: PageData = { props: this.props };
-      const content = JSON.stringify(data).replace(/\<(!--|script|\/script)/gi, "<\\$1");
+      const content = JSON.stringify(data).replace(
+        /\<(!--|script|\/script)/gi,
+        "<\\$1"
+      );
 
       script += `<script>window.${GLOBAL_PAGE_DATA}=${content}</script>`;
       script += `<script type="module" src="${this.scriptUrl}"></script>`;
@@ -353,16 +366,24 @@ class ReactBody<P> implements Body {
     return { htmlAttributes, bodyAttributes, head, script };
   }
 
-  async readableStream(options: ReadableStreamOptions = {}): Promise<ReadableStream> {
+  async readableStream(
+    options: ReadableStreamOptions = {}
+  ): Promise<ReadableStream> {
     const { signal, onError = logger } = options;
-    const {readable, writable} = new TransformStream();
-    const stream = await ReactDOM.renderToReadableStream(this.app, { signal, onError });
+    const { readable, writable } = new TransformStream();
+    const stream = await ReactDOM.renderToReadableStream(this.app, {
+      signal,
+      onError,
+    });
     const [prefix, suffix] = this.template(this.getDocumentOptions());
     writable.getWriter().write(prefix);
-    stream.pipeTo(writable, { preventClose: true }).then(() => {
-      const writer = writable.getWriter();
-      return writer.write(suffix).then(() => writer.close());
-    }).catch(err => onError?.(err));
+    stream
+      .pipeTo(writable, { preventClose: true })
+      .then(() => {
+        const writer = writable.getWriter();
+        return writer.write(suffix).then(() => writer.close());
+      })
+      .catch((err) => onError?.(err));
     return readable;
   }
 
@@ -370,7 +391,8 @@ class ReactBody<P> implements Body {
     const { signal, onError } = options;
 
     return new Promise((resolve, reject) => {
-      let prefix = "", suffix = "";
+      let prefix = "",
+        suffix = "";
       const proxy = new PassThrough();
       const stream = ReactDOM.renderToPipeableStream(this.app, {
         onAllReady: () => {
