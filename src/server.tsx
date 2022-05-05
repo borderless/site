@@ -370,47 +370,62 @@ class ReactBody<P> implements Body {
     options: ReadableStreamOptions = {}
   ): Promise<ReadableStream> {
     const { signal, onError = logger } = options;
-    const { readable, writable } = new TransformStream();
+
     const stream = await ReactDOM.renderToReadableStream(this.app, {
       signal,
       onError,
     });
+
+    const encoder = new TextEncoder();
+    const { readable, writable } = new TransformStream();
     const [prefix, suffix] = this.template(this.getDocumentOptions());
-    writable.getWriter().write(prefix);
-    stream
-      .pipeTo(writable, { preventClose: true })
-      .then(() => {
-        const writer = writable.getWriter();
-        return writer.write(suffix).then(() => writer.close());
-      })
-      .catch((err) => onError?.(err));
+    const write = (text: string) => {
+      const writer = writable.getWriter();
+      return writer
+        .write(encoder.encode(text))
+        .then(() => writer.releaseLock());
+    };
+
+    write(prefix)
+      .then(() => stream.pipeTo(writable, { preventClose: true }))
+      .then(() => write(suffix).then(() => writable.close()))
+      .catch(onError);
+
     return readable;
   }
 
   nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
-    const { signal, onError } = options;
+    const { signal, onError = logger } = options;
 
     return new Promise((resolve, reject) => {
-      let prefix = "",
-        suffix = "";
+      let prefix = "";
+      let suffix = "";
       const proxy = new PassThrough();
+
+      const onAllReady = () => {
+        signal?.removeEventListener("abort", onAbort);
+        proxy.write(suffix);
+      };
+
+      const onShellReady = () => {
+        [prefix, suffix] = this.template(this.getDocumentOptions());
+        proxy.write(prefix);
+        stream.pipe(proxy);
+        return resolve(proxy);
+      };
+
+      const onShellError = (err: unknown) => {
+        signal?.removeEventListener("abort", onAbort);
+        return reject(err);
+      };
+
       const stream = ReactDOM.renderToPipeableStream(this.app, {
-        onAllReady: () => {
-          signal?.removeEventListener("abort", onAbort);
-          proxy.write(suffix);
-        },
-        onError: onError ?? logger,
-        onShellReady: () => {
-          [prefix, suffix] = this.template(this.getDocumentOptions());
-          proxy.write(prefix);
-          stream.pipe(proxy);
-          return resolve(proxy);
-        },
-        onShellError: (err) => {
-          signal?.removeEventListener("abort", onAbort);
-          return reject(err);
-        },
+        onAllReady,
+        onError,
+        onShellReady,
+        onShellError,
       });
+
       const onAbort = () => stream.abort();
       signal?.addEventListener("abort", onAbort);
     });

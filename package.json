@@ -79,7 +79,7 @@
     "react": "^18.1.0",
     "react-dom": "^18.1.0",
     "ts-node": "^10.7.0",
-    "typescript": "^4.3.4"
+    "typescript": "^4.6.4"
   },
   "types": "./dist/index.d.ts",
   "browser": {
