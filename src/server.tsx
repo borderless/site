@@ -10,17 +10,28 @@ import ErrorComponent, {
 } from "./error.js";
 import { AppContext, GLOBAL_PAGE_DATA, renderApp, PageData } from "./shared.js";
 import { FilledContext } from "react-helmet-async";
+import { PassThrough, Readable } from "node:stream";
+import type { ServerSideProps, ServerSidePropsContext, GetServerSideProps, Request } from "./index.js";
+
+export type OnError = (error: unknown) => void;
 
 /**
- * Simple `Request` interface for rendering a page.
+ * Generic node.js stream support in the API.
  */
-export interface Request {
-  pathname: string;
-  search: ReadonlyMap<string, string>;
-  headers: ReadonlyMap<string, string | string[] | undefined>;
+export interface NodeStream {
+  pipe<Writable extends NodeJS.WritableStream>(destination: Writable): Writable;
 }
 
+export interface NodeStreamOptions {
+  onError?: OnError;
+  signal?: AbortSignal;
+}
+
+/**
+ * Supported body interfaces.
+ */
 export interface Body {
+  nodeStream(options?: NodeStreamOptions): Promise<NodeStream>;
   text(): string;
 }
 
@@ -32,43 +43,6 @@ export interface Response {
   headers: ReadonlyMap<string, string>;
   body: Body | null;
 }
-
-/**
- * The context send to `getServerSideProps`.
- */
-export interface ServerSidePropsContext<C> {
-  route: string;
-  request: Request;
-  params: ReadonlyMap<string, string>;
-  context: C;
-}
-
-/**
- * The context used on the error page.
- */
-export interface ServerSidePropsErrorContext<C> {
-  request: Request;
-  params: ReadonlyMap<string, string>;
-  context: C;
-  error: unknown;
-}
-
-/**
- * Valid return type of `getServerSideProps`.
- */
-export interface ServerSideProps<P> {
-  props: P;
-  status?: number;
-  headers?: Iterable<[string, string]>;
-  redirect?: { url: string };
-}
-
-/**
- * Function signature for `getServerSideProps`.
- */
-export type GetServerSideProps<P, C> = (
-  context: ServerSidePropsContext<C>
-) => ServerSideProps<P> | undefined | null;
 
 /**
  * The page component exports regular `default` component with `getServerSideProps`.
@@ -329,6 +303,14 @@ function require<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
+/**
+ * Default fallback for error handling.
+ */
+const logger = process.env.NODE_ENV === "production" ? undefined : (err: unknown) => console.error(err)
+
+/**
+ * React body renderer that supports multiple ways of returning the application.
+ */
 class ReactBody<P> implements Body {
   constructor(
     private app: JSX.Element,
@@ -363,6 +345,34 @@ class ReactBody<P> implements Body {
     }
 
     return { htmlAttributes, bodyAttributes, head, script };
+  }
+
+  nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
+    const { signal, onError } = options;
+
+    return new Promise((resolve, reject) => {
+      let prefix = "", suffix = "";
+      const proxy = new PassThrough();
+      const stream = ReactDOM.renderToPipeableStream(this.app, {
+        onAllReady: () => {
+          signal?.removeEventListener("abort", onAbort);
+          proxy.write(suffix);
+        },
+        onError: onError ?? logger,
+        onShellReady: () => {
+          [prefix, suffix] = this.template(this.getDocumentOptions());
+          proxy.write(prefix);
+          stream.pipe(proxy);
+          return resolve(proxy);
+        },
+        onShellError: (err) => {
+          signal?.removeEventListener("abort", onAbort);
+          return reject(err);
+        },
+      });
+      const onAbort = () => stream.abort();
+      signal?.addEventListener("abort", onAbort);
+    });
   }
 
   text() {

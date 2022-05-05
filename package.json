@@ -22,13 +22,11 @@
   "bin": "./dist/bin.js",
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
+    ".": "./dist/index.js",
     "./dev": "./dist/dev.js",
     "./head": "./dist/head.js",
     "./client": "./dist/client.js",
+    "./server": "./dist/server.js",
     "./shared": "./dist/shared.js",
     "./404": "./dist/404.js",
     "./error": "./dist/error.js",
@@ -88,5 +86,12 @@
     "project": [
       "tsconfig.build.json"
     ]
+  },
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/*"
+      ]
+    }
   }
 }

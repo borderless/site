@@ -21,8 +21,9 @@ export default function NotFound(props: NotFoundProps) {
             cssText: `html,body,#__SITE__{height:100%;margin:0}`,
           },
         ]}
-        title="Page not found"
-      />
+      >
+        <title>Page not found</title>
+      </Head>
       <main
         style={{
           display: "flex",

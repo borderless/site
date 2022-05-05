@@ -20,8 +20,12 @@ app.get("*", async (req, res, next) => {
       res.setHeader(key, value);
     }
 
-    if (response.body) res.write(response.body.text());
-    res.end();
+    if (response.body) {
+      const stream = await response.body.nodeStream();
+      stream.pipe(res);
+    } else {
+      res.end();
+    }
   } catch (err) {
     next(err);
   }

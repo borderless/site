@@ -1,5 +1,4 @@
 import { watch } from "chokidar";
-import react from "@vitejs/plugin-react";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { URL } from "node:url";
@@ -10,17 +9,17 @@ import {
   PluginOption,
   ViteDevServer,
 } from "vite";
-import type { RollupOutput, OutputChunk } from "rollup";
+import react from "@vitejs/plugin-react";
 import {
   createServer as createSiteServer,
-  Request,
-  Response,
   Server,
   AppModule,
   DocumentModule,
   ServerPage,
   ServerFile,
-} from "./index.js";
+} from "./server.js";
+import type { RollupOutput, OutputChunk } from "rollup";
+import type { Request } from "./index.js";
 
 /**
  * Support entry point file extensions.
@@ -30,9 +29,9 @@ const EXTENSIONS = ["js", "jsx", "ts", "tsx"];
 /**
  * Path to import default `App` for client-side rendering.
  */
-const SITE_COMPONENT_APP_MODULE_ID = "@borderless/site/app";
-const SITE_MODULE_ID = "@borderless/site";
-const SITE_CLIENT_MODULE_ID = "@borderless/site/client";
+const SITE_COMPONENT_APP_IMPORT_NAME = "@borderless/site/app";
+const SITE_SERVER_IMPORT_NAME = "@borderless/site/server";
+const SITE_CLIENT_IMPORT_NAME = "@borderless/site/client";
 
 /**
  * Shared vite config.
@@ -69,7 +68,7 @@ function buildPageScript(
 ): string {
   return [
     `import ReactDOM from "react-dom/client";`,
-    `import { render } from ${JSON.stringify(SITE_CLIENT_MODULE_ID)};`,
+    `import { render } from ${JSON.stringify(SITE_CLIENT_IMPORT_NAME)};`,
     `import Component from ${JSON.stringify(pagePath)};`,
     `import App from ${JSON.stringify(appPath)};`,
     `render(App, Component, ${JSON.stringify(mode)});`,
@@ -122,7 +121,7 @@ function buildServerScript(
   };
 
   return [
-    `import { createServer } from ${JSON.stringify(SITE_MODULE_ID)};`,
+    `import { createServer } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
     ``,
     `export const server = createServer({`,
     `  pages: ${stringifyPages(files.pages)},`,
@@ -136,7 +135,7 @@ function buildServerScript(
 
 function buildServerDts() {
   return [
-    `import { Server } from ${JSON.stringify(SITE_MODULE_ID)};`,
+    `import { Server } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
     ``,
     `export declare const server: Server<unknown>;`,
   ].join("\n");
@@ -160,7 +159,7 @@ export interface ClientConfig {
  */
 function clientViteConfig(options: ClientConfig) {
   const { mode, root, files, publicDir, sourceMap } = options;
-  const appPath = files.app ?? SITE_COMPONENT_APP_MODULE_ID;
+  const appPath = files.app ?? SITE_COMPONENT_APP_IMPORT_NAME;
   const pagePaths = Object.values(files.pages);
 
   if (files.error) pagePaths.push(files.error);

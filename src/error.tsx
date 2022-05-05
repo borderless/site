@@ -25,8 +25,9 @@ export default function Error({ status, stack }: ErrorProps) {
             cssText: `html,body,#__SITE__{height:100%;margin:0}`,
           },
         ]}
-        title="Application error"
-      />
+      >
+        <title>Application error</title>
+      </Head>
       <main
         style={{
           display: "flex",
