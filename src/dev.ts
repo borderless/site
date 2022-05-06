@@ -295,12 +295,12 @@ export async function build(options: BuildOptions): Promise<undefined> {
     },
   })) as RollupOutput;
 
-  const result = (await buildVite({
+  const serverResult = (await buildVite({
     ...DEFAULT_VITE_CONFIG,
     root,
     base,
     mode: "production",
-    publicDir: options.publicDir,
+    publicDir: false,
     build: {
       target: server.target ?? DEFAULT_SERVER_TARGET,
       rollupOptions: {
@@ -332,7 +332,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
     },
   })) as RollupOutput;
 
-  const serverOutput = result.output.find(
+  const serverOutput = serverResult.output.find(
     (x) => x.type === "chunk" && x.facadeModuleId === SITE_SERVER_MODULE_ID
   );
 
