@@ -4,7 +4,7 @@
     "module": "ES2020",
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node", "jest"],
+    "types": ["node", "jest", "vite/client"],
     "jsx": "react"
   },
   "include": ["./src/**/*"]

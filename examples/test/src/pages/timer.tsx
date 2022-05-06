@@ -1,10 +1,13 @@
 import React from "react";
+import { button } from "./timer.module.css";
 
 export default function Timer() {
   const [passed, setPassed] = React.useState(0);
   const [total, setTotal] = React.useState(0);
   const [running, setRunning] = React.useState(true);
-  const [startTime, setStartTime] = React.useState(typeof performance !== "undefined" ? performance.now() : 0);
+  const [startTime, setStartTime] = React.useState(
+    typeof performance !== "undefined" ? performance.now() : 0
+  );
 
   const getTotal = () => passed + (performance.now() - startTime);
 
@@ -35,7 +38,9 @@ export default function Timer() {
   return (
     <div style={{ margin: 10 }}>
       {String((total / 1000).toFixed(2))}
-      <button onClick={changeTimer}>{running ? "Stop" : "Start"}</button>
+      <button className={button} onClick={changeTimer}>
+        {running ? "Stop" : "Start"}
+      </button>
     </div>
   );
 }

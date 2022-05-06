@@ -8,6 +8,7 @@ import {
   build as buildVite,
   PluginOption,
   ViteDevServer,
+  ChunkMetadata,
 } from "vite";
 import react from "@vitejs/plugin-react";
 import {
@@ -90,18 +91,18 @@ function buildServerScript(
   const clientPages = new Map(
     clientResult.output
       .filter((x): x is OutputChunk => x.type === "chunk" && x.isEntry)
-      .map<[string, string]>((x) => [x.facadeModuleId ?? "", x.fileName])
+      .map<[string, OutputChunk]>((x) => [x.facadeModuleId ?? "", x])
   );
 
   const stringifyImport = (path: string) => {
     return `import(${JSON.stringify("/" + relative(root, path))})`;
   };
 
-  const getVitePageUrl = (path: string) => {
+  const getVitePageOutput = (path: string) => {
     const entry = vitePageEntry(root, path);
-    const clientUrl = clientPages.get(entry);
-    if (!clientUrl) throw new TypeError(`Unable to load entry: ${entry}`);
-    return base + clientUrl;
+    const chunk = clientPages.get(entry);
+    if (!chunk) throw new TypeError(`Unable to load entry: ${entry}`);
+    return chunk as OutputChunk & { viteMetadata: ChunkMetadata };
   };
 
   const stringifyModule = (path: string | undefined) => {
@@ -110,8 +111,12 @@ function buildServerScript(
 
   const stringifyServerPage = (path: string | undefined) => {
     if (!path) return "undefined";
-    const url = getVitePageUrl(path);
-    return `{ module: ${stringifyImport(path)}, url: ${JSON.stringify(url)} }`;
+    const { viteMetadata, fileName } = getVitePageOutput(path);
+    const url = base + fileName;
+    const css = Array.from(viteMetadata.importedCss).map((x) => base + x);
+    return `{ module: ${stringifyImport(path)}, url: ${JSON.stringify(
+      url
+    )}, css: ${JSON.stringify(css)} }`;
   };
 
   const stringifyPages = (pages: Record<string, string>) => {

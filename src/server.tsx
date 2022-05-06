@@ -1,3 +1,5 @@
+/// <reference lib="webworker" />
+
 import React from "react";
 import * as ReactDOM from "react-dom/server";
 import { zip, map } from "iterative";
@@ -91,7 +93,8 @@ export interface ServerFile<T> {
  */
 export interface ServerPage<P, C> {
   module: ServerLoader<PageModule<P, C>>;
-  url: string | undefined;
+  url?: string;
+  css?: string[];
 }
 
 /**
@@ -122,6 +125,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
         key: "_error",
         module: fn(options.error.module),
         scriptUrl: options.error.url,
+        cssUrls: options.error.css,
         params: new Map(),
       }
     : {
@@ -131,6 +135,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
           getServerSideProps: getServerSidePropsError,
         }),
         scriptUrl: undefined,
+        cssUrls: undefined,
         params: new Map(),
       };
 
@@ -140,12 +145,14 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
         key: "_404",
         module: fn(options.notFound.module),
         scriptUrl: options.notFound.url,
+        cssUrls: options.notFound.css,
         params: new Map(),
       }
     : {
         key: "_404",
         module: fn({ default: NotFoundComponent }),
         scriptUrl: undefined,
+        cssUrls: undefined,
         params: new Map(),
       };
 
@@ -205,6 +212,7 @@ type Route<P, C> = {
   key: string;
   module: Loader<PageModule<P, C>>;
   scriptUrl: string | undefined;
+  cssUrls: string[] | undefined;
   params: ReadonlyMap<string, string>;
 };
 
@@ -218,13 +226,14 @@ function createPageRouter<C>(
     Object.entries(pages).map(
       ([key, contents]): [
         string,
-        Pick<Route<{}, C>, "module" | "scriptUrl">
+        Pick<Route<{}, C>, "module" | "scriptUrl" | "cssUrls">
       ] => {
         return [
           key,
           {
             module: fn(contents.module),
             scriptUrl: contents.url,
+            cssUrls: contents.css,
           },
         ];
       }
@@ -235,9 +244,9 @@ function createPageRouter<C>(
 
   return (pathname) => {
     for (const { route, keys, values } of router(pathname)) {
-      const { module, scriptUrl } = routes.get(route)!;
+      const { module, scriptUrl, cssUrls } = routes.get(route)!;
       const params = new Map(zip(keys, map(values, decode)));
-      return { key: route, module, scriptUrl, params };
+      return { key: route, module, scriptUrl, params, cssUrls };
     }
   };
 }
@@ -263,7 +272,6 @@ async function render<P, C>(
   initialStatus: number,
   route: Route<P, C>
 ): Promise<Response> {
-  const { key, scriptUrl } = route;
   const { props, redirect, status, headers } = serverSideProps;
 
   // Skip rendering props when `redirect` is returned.
@@ -276,7 +284,7 @@ async function render<P, C>(
   }
 
   const AppComponent = require(app.default, `The "_app" module is missing a default export`);
-  const Component = require(page.default, `The page for "${key}" module is missing a default export`);
+  const Component = require(page.default, `The page for "${route.key}" module is missing a default export`);
   const template = require(document.default, `The "_document" module is missing a default export`);
 
   const appProps: AppProps<P> = { Component, props };
@@ -286,7 +294,7 @@ async function render<P, C>(
   return {
     status: status ?? initialStatus,
     headers: new Map([...(headers || []), ["content-type", "text/html"]]),
-    body: new ReactBody(appElement, template, props, appContext, scriptUrl),
+    body: new ReactBody(appElement, template, props, appContext, route),
   };
 }
 
@@ -327,13 +335,13 @@ const logger =
 /**
  * React body renderer that supports multiple ways of returning the application.
  */
-class ReactBody<P> implements Body {
+class ReactBody<P, C> implements Body {
   constructor(
     private app: JSX.Element,
     private template: (options: DocumentOptions) => [string, string],
     private props: P,
     private context: AppContext,
-    private scriptUrl: string | undefined
+    private route: Route<P, C>
   ) {}
 
   getDocumentOptions(): DocumentOptions {
@@ -352,7 +360,13 @@ class ReactBody<P> implements Body {
     head += helmet.style.toString();
     head += helmet.script.toString();
 
-    if (this.scriptUrl) {
+    if (this.route.cssUrls) {
+      for (const cssUrl of this.route.cssUrls) {
+        head += `<link rel="stylesheet" href="${cssUrl}">`;
+      }
+    }
+
+    if (this.route.scriptUrl) {
       const data: PageData = { props: this.props };
       const content = JSON.stringify(data).replace(
         /\<(!--|script|\/script)/gi,
@@ -360,7 +374,7 @@ class ReactBody<P> implements Body {
       );
 
       script += `<script>window.${GLOBAL_PAGE_DATA}=${content}</script>`;
-      script += `<script type="module" src="${this.scriptUrl}"></script>`;
+      script += `<script type="module" src="${this.route.scriptUrl}"></script>`;
     }
 
     return { htmlAttributes, bodyAttributes, head, script };
