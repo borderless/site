@@ -3,12 +3,14 @@ import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { URL } from "node:url";
 import { writeFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
 import {
   createServer as createViteServer,
   build as buildVite,
   PluginOption,
   ViteDevServer,
   ChunkMetadata,
+  Plugin,
 } from "vite";
 import react from "@vitejs/plugin-react";
 import {
@@ -18,6 +20,7 @@ import {
   DocumentModule,
   ServerPage,
   ServerFile,
+  NodeStream,
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import type { Request } from "./index.js";
@@ -71,7 +74,6 @@ function buildPageScript(
   mode: string
 ): string {
   return [
-    `import ReactDOM from "react-dom/client";`,
     `import { render } from ${JSON.stringify(SITE_CLIENT_IMPORT_NAME)};`,
     `import Component from ${JSON.stringify(pagePath)};`,
     `import App from ${JSON.stringify(appPath)};`,
@@ -165,46 +167,24 @@ export interface ClientConfig {
   sourceMap: boolean | undefined;
 }
 
-/**
- * Generate the vite configuration for supporting client side rendering.
- */
-function clientViteConfig(options: ClientConfig) {
-  const { mode, root, files, publicDir } = options;
-  const appPath = files.app ?? SITE_COMPONENT_APP_IMPORT_NAME;
-  const pagePaths = Object.values(files.pages);
-
-  if (files.error) pagePaths.push(files.error);
-  if (files.notFound) pagePaths.push(files.notFound);
-
+function sitePagePlugin(
+  mode: string,
+  getAppPath: () => string | undefined
+): Plugin {
   return {
-    ...DEFAULT_VITE_CONFIG,
-    root,
-    mode,
-    publicDir,
-    plugins: [
-      {
-        name: "site-page-entry",
-        resolveId(id) {
-          // Avoid attempts to load the fake page modules from file system.
-          if (id.startsWith(`${SITE_PAGE_MODULE_PREFIX}/`)) {
-            return id;
-          }
-        },
-        load(id) {
-          if (id.startsWith(`${SITE_PAGE_MODULE_PREFIX}/`)) {
-            const pagePath = id.slice(SITE_PAGE_MODULE_PREFIX.length);
-            return buildPageScript(appPath, pagePath, mode);
-          }
-        },
-      },
-      options.mode === "development" ? react() : undefined,
-    ] as PluginOption[],
-    build: {
-      target: options.target,
-      sourcemap: options.sourceMap,
-      rollupOptions: {
-        input: pagePaths.map((x) => vitePageEntry(options.root, x)),
-      },
+    name: "site-page-entry",
+    resolveId(id) {
+      // Avoid attempts to load the fake page modules from file system.
+      if (id.startsWith(`${SITE_PAGE_MODULE_PREFIX}/`)) {
+        return id;
+      }
+    },
+    load(id) {
+      if (id.startsWith(`${SITE_PAGE_MODULE_PREFIX}/`)) {
+        const appPath = getAppPath() ?? SITE_COMPONENT_APP_IMPORT_NAME;
+        const pagePath = id.slice(SITE_PAGE_MODULE_PREFIX.length);
+        return buildPageScript(appPath, pagePath, mode);
+      }
     },
   };
 }
@@ -290,25 +270,27 @@ export interface BuildOptions extends ListOptions {
  */
 export async function build(options: BuildOptions): Promise<undefined> {
   const { client = {}, server = {}, base = "/", root } = options;
-
   const clientOutDir = resolve(options.root, client.outDir ?? "dist/client");
   const serverOutDir = resolve(options.root, server.outDir ?? "dist/server");
   const files = await list(options);
+  const pagePaths = Object.values(files.pages);
 
-  const viteConfig = clientViteConfig({
-    root: options.root,
-    files: files,
-    mode: "production",
-    target: client.target ?? DEFAULT_CLIENT_TARGET,
-    publicDir: options.publicDir,
-    sourceMap: options.sourceMap,
-  });
+  if (files.error) pagePaths.push(files.error);
+  if (files.notFound) pagePaths.push(files.notFound);
 
   const clientResult = (await buildVite({
-    ...viteConfig,
+    ...DEFAULT_VITE_CONFIG,
+    root,
     base,
+    mode: "production",
+    publicDir: options.publicDir,
+    plugins: [sitePagePlugin("production", () => files.app)],
     build: {
-      ...viteConfig.build,
+      target: client.target ?? DEFAULT_CLIENT_TARGET,
+      sourcemap: options.sourceMap,
+      rollupOptions: {
+        input: pagePaths.map((x) => vitePageEntry(options.root, x)),
+      },
       outDir: clientOutDir,
     },
   })) as RollupOutput;
@@ -316,6 +298,9 @@ export async function build(options: BuildOptions): Promise<undefined> {
   const result = (await buildVite({
     ...DEFAULT_VITE_CONFIG,
     root,
+    base,
+    mode: "production",
+    publicDir: options.publicDir,
     build: {
       target: server.target ?? DEFAULT_SERVER_TARGET,
       rollupOptions: {
@@ -384,29 +369,28 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   const cwd = resolve(options.root, options.src);
   const files = new Set<string>();
   const watcher = getChokidar(cwd);
-  let cachedSite: Server<DevServerContext> | undefined = undefined;
+  let cache: { site: Server<DevServerContext>; list: List } | null = null;
 
   watcher.on("add", (path) => {
     files.add(path);
-    if (cachedSite) reloadSite();
+    cache = null;
   });
 
   watcher.on("unlink", (path) => {
     files.delete(path);
-    if (cachedSite) reloadSite();
-  });
-
-  const viteConfig = clientViteConfig({
-    root: options.root,
-    files: filesToList(cwd, files),
-    mode: "development",
-    target: options.target ?? DEFAULT_CLIENT_TARGET,
-    publicDir: options.publicDir,
-    sourceMap: true,
+    cache = null;
   });
 
   const vite = await createViteServer({
-    ...viteConfig,
+    ...DEFAULT_VITE_CONFIG,
+    root: options.root,
+    mode: "development",
+    publicDir: options.publicDir,
+    plugins: [sitePagePlugin("development", () => cache?.list.app), react()],
+    build: {
+      target: options.target,
+      sourcemap: true,
+    },
     server: { middlewareMode: "ssr" },
   });
 
@@ -431,10 +415,9 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     );
   };
 
-  const reloadSite = () => {
+  const reloadCache = () => {
     const list = filesToList(cwd, files);
-
-    cachedSite = createSiteServer({
+    const site = createSiteServer({
       pages: loadPages(list.pages),
       error: list.error ? loadServerPage(list.error) : undefined,
       notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
@@ -443,16 +426,12 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
         ? loadServerModule<DocumentModule>(list.document)
         : undefined,
     });
-
-    return cachedSite;
-  };
-
-  const getSite = () => {
-    return cachedSite || reloadSite();
+    cache = { site, list };
+    return cache;
   };
 
   // Pre-load site before user accesses page.
-  getSite();
+  reloadCache();
 
   // The server gets dynamic site instances and injects the Vite transform into HTML.
   const server = async (
@@ -461,19 +440,40 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   ): Promise<{
     status: number;
     headers: ReadonlyMap<string, string>;
-    text: string;
+    data: NodeStream | null;
   }> => {
-    const site = getSite();
+    const { site } = cache ?? reloadCache();
     const response = await site(req, {});
+
+    if (
+      !response.body ||
+      response.headers.get("content-type") !== "text/html"
+    ) {
+      return {
+        status: response.status,
+        headers: response.headers,
+        data: response.body ? await response.body.nodeStream() : null,
+      };
+    }
+
+    // Fake a valid HTML file for vite to inject whatever it needs around the stream.
+    const proxy = new PassThrough();
+    const buffer = new PassThrough();
+    const outlet = `<!-- @@SSR_OUTLET@@ -->`;
+    const { prefix, suffix, stream } = await response.body.rawNodeStream();
+    const html = await vite.transformIndexHtml(url, prefix + outlet + suffix);
+    const [htmlPrefix, htmlSuffix] = html.split(outlet);
+    proxy.write(htmlPrefix);
+    stream.pipe(buffer).pipe(proxy, { end: false });
+    buffer.on("end", () => {
+      proxy.write(htmlSuffix);
+      proxy.end();
+    });
 
     return {
       status: response.status,
       headers: response.headers,
-      text: response.body
-        ? response.headers.get("content-type") === "text/html"
-          ? await vite.transformIndexHtml(url, response.body.text())
-          : response.body.text()
-        : "",
+      data: proxy,
     };
   };
 
@@ -482,7 +482,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     const next = (err: Error | undefined) => {
       if (err) {
         res.statusCode = 500;
-        res.end(err.stack);
+        res.end(vite.ssrRewriteStacktrace(err.stack ?? ""));
         return;
       }
 
@@ -500,12 +500,15 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
           for (const [key, value] of response.headers) {
             res.setHeader(key, value);
           }
-          res.write(response.text);
-          res.end();
+          if (response.data) {
+            response.data.pipe(res);
+          } else {
+            res.end();
+          }
         })
         .catch((err) => {
           res.statusCode = 500;
-          res.end(`Error: ${err.stack}`);
+          res.end(`Error: ${vite.ssrRewriteStacktrace(err.stack)}`);
         });
     };
 

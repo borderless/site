@@ -39,13 +39,34 @@ export interface ReadableStreamOptions {
   signal?: AbortSignal;
 }
 
+export interface RawNodeStreamOptions extends NodeStreamOptions {
+  onReady?: () => void;
+}
+
+export interface RawNodeStream {
+  prefix: string;
+  suffix: string;
+  stream: ReactDOM.PipeableStream;
+}
+
+export interface RawReadableStreamOptions extends ReadableStreamOptions {}
+
+export interface RawReadableStream {
+  prefix: Uint8Array;
+  suffix: Uint8Array;
+  stream: ReactDOM.ReactDOMServerReadableStream;
+}
+
 /**
  * Supported body interfaces.
  */
 export interface Body {
+  rawNodeStream(options?: RawNodeStreamOptions): Promise<RawNodeStream>;
   nodeStream(options?: NodeStreamOptions): Promise<NodeStream>;
+  rawReadableStream(
+    options?: RawReadableStreamOptions
+  ): Promise<RawReadableStream>;
   readableStream(options?: ReadableStreamOptions): Promise<ReadableStream>;
-  text(): string;
 }
 
 /**
@@ -380,52 +401,56 @@ class ReactBody<P, C> implements Body {
     return { htmlAttributes, bodyAttributes, head, script };
   }
 
+  rawReadableStream(
+    options: RawReadableStreamOptions = {}
+  ): Promise<RawReadableStream> {
+    const { signal, onError = logger } = options;
+    return ReactDOM.renderToReadableStream(this.app, {
+      signal,
+      onError,
+    }).then((stream) => {
+      const [prefix, suffix] = this.template(this.getDocumentOptions());
+      const encoder = new TextEncoder();
+
+      return {
+        prefix: encoder.encode(prefix),
+        suffix: encoder.encode(suffix),
+        stream,
+      };
+    });
+  }
+
   async readableStream(
     options: ReadableStreamOptions = {}
   ): Promise<ReadableStream> {
-    const { signal, onError = logger } = options;
-
-    const stream = await ReactDOM.renderToReadableStream(this.app, {
-      signal,
-      onError,
-    });
-
-    const encoder = new TextEncoder();
+    const { prefix, suffix, stream } = await this.rawReadableStream(options);
     const { readable, writable } = new TransformStream();
-    const [prefix, suffix] = this.template(this.getDocumentOptions());
-    const write = (text: string) => {
+
+    const write = (text: Uint8Array) => {
       const writer = writable.getWriter();
-      return writer
-        .write(encoder.encode(text))
-        .then(() => writer.releaseLock());
+      return writer.write(text).then(() => writer.releaseLock());
     };
 
     write(prefix)
       .then(() => stream.pipeTo(writable, { preventClose: true }))
       .then(() => write(suffix).then(() => writable.close()))
-      .catch(onError);
+      .catch(options.onError);
 
     return readable;
   }
 
-  nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
-    const { signal, onError = logger } = options;
+  rawNodeStream(options: RawNodeStreamOptions = {}): Promise<RawNodeStream> {
+    const { signal, onError = logger, onReady } = options;
 
     return new Promise((resolve, reject) => {
-      let prefix = "";
-      let suffix = "";
-      const proxy = new PassThrough();
-
       const onAllReady = () => {
         signal?.removeEventListener("abort", onAbort);
-        proxy.write(suffix);
+        return onReady?.();
       };
 
       const onShellReady = () => {
-        [prefix, suffix] = this.template(this.getDocumentOptions());
-        proxy.write(prefix);
-        stream.pipe(proxy);
-        return resolve(proxy);
+        const [prefix, suffix] = this.template(this.getDocumentOptions());
+        return resolve({ prefix, suffix, stream });
       };
 
       const onShellError = (err: unknown) => {
@@ -445,9 +470,14 @@ class ReactBody<P, C> implements Body {
     });
   }
 
-  text() {
-    const content = ReactDOM.renderToString(this.app);
-    const [prefix, suffix] = this.template(this.getDocumentOptions());
-    return prefix + content + suffix;
+  async nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
+    const { prefix, suffix, stream } = await this.rawNodeStream({
+      ...options,
+      onReady: () => proxy.write(suffix),
+    });
+    const proxy = new PassThrough();
+    proxy.write(prefix);
+    stream.pipe(proxy);
+    return proxy;
   }
 }
