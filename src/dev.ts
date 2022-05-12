@@ -2,15 +2,15 @@ import { watch } from "chokidar";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { URL } from "node:url";
-import { writeFile } from "node:fs/promises";
+import { writeFile, readdir, stat, copyFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
   createServer as createViteServer,
   build as buildVite,
-  PluginOption,
   ViteDevServer,
   ChunkMetadata,
   Plugin,
+  normalizePath,
 } from "vite";
 import react from "@vitejs/plugin-react";
 import {
@@ -25,6 +25,7 @@ import {
 import type { RollupOutput, OutputChunk } from "rollup";
 import type { Request } from "./index.js";
 
+const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "es2016";
 const DEFAULT_SERVER_TARGET = "es2019";
 
@@ -270,10 +271,15 @@ export interface BuildOptions extends ListOptions {
  */
 export async function build(options: BuildOptions): Promise<undefined> {
   const { client = {}, server = {}, base = "/", root } = options;
+  const publicDir = resolve(
+    options.root,
+    options.publicDir ?? DEFAULT_PUBLIC_DIR
+  );
   const clientOutDir = resolve(options.root, client.outDir ?? "dist/client");
   const serverOutDir = resolve(options.root, server.outDir ?? "dist/server");
   const files = await list(options);
   const pagePaths = Object.values(files.pages);
+  const publicAssets: string[] = [];
 
   if (files.error) pagePaths.push(files.error);
   if (files.notFound) pagePaths.push(files.notFound);
@@ -283,7 +289,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
     root,
     base,
     mode: "production",
-    publicDir: options.publicDir,
+    publicDir: false,
     plugins: [sitePagePlugin("production", () => files.app)],
     build: {
       target: client.target ?? DEFAULT_CLIENT_TARGET,
@@ -295,42 +301,48 @@ export async function build(options: BuildOptions): Promise<undefined> {
     },
   })) as RollupOutput;
 
-  const serverResult = (await buildVite({
-    ...DEFAULT_VITE_CONFIG,
-    root,
-    base,
-    mode: "production",
-    publicDir: false,
-    build: {
-      target: server.target ?? DEFAULT_SERVER_TARGET,
-      rollupOptions: {
-        input: { server: SITE_SERVER_MODULE_ID },
-        output: {
-          format: "esm",
-        },
-        plugins: [
-          {
-            name: "site-server-entry",
-            resolveId(id) {
-              if (id === SITE_SERVER_MODULE_ID) {
-                return id;
-              }
-            },
-            load(id) {
-              if (id === SITE_SERVER_MODULE_ID) {
-                return buildServerScript(root, base, files, clientResult);
-              }
-            },
+  const [serverResult] = await Promise.all([
+    (await buildVite({
+      ...DEFAULT_VITE_CONFIG,
+      root,
+      base,
+      mode: "production",
+      publicDir: false,
+      build: {
+        target: server.target ?? DEFAULT_SERVER_TARGET,
+        rollupOptions: {
+          input: { server: SITE_SERVER_MODULE_ID },
+          output: {
+            format: "esm",
           },
-        ],
+          plugins: [
+            {
+              name: "site-server-entry",
+              resolveId(id) {
+                if (id === SITE_SERVER_MODULE_ID) {
+                  return id;
+                }
+              },
+              load(id) {
+                if (id === SITE_SERVER_MODULE_ID) {
+                  return buildServerScript(root, base, files, clientResult);
+                }
+              },
+            },
+          ],
+        },
+        outDir: serverOutDir,
+        ssr: true,
       },
-      outDir: serverOutDir,
-      ssr: true,
-    },
-    optimizeDeps: {
-      include: [],
-    },
-  })) as RollupOutput;
+    })) as RollupOutput,
+    // Copy all files from the public directory and track them for output into server bundle.
+    copyDir(
+      publicDir,
+      clientOutDir,
+      (fileName) =>
+        !!publicAssets.push(normalizePath(relative(publicDir, fileName)))
+    ),
+  ]);
 
   const serverOutput = serverResult.output.find(
     (x) => x.type === "chunk" && x.facadeModuleId === SITE_SERVER_MODULE_ID
@@ -340,14 +352,20 @@ export async function build(options: BuildOptions): Promise<undefined> {
     throw new TypeError(`No server output: ${SITE_SERVER_MODULE_ID}`);
   }
 
-  // Write a `.d.ts` file so TypeScript _just works_.
-  await writeFile(
-    resolve(serverOutDir, serverOutput.fileName.replace(/\.js$/, ".d.ts")),
-    buildServerDts()
-  );
-
-  // Ensure the `server.js` file is loaded as ESM.
-  await writeFile(resolve(serverOutDir, "package.json"), `{"type":"module"}`);
+  await Promise.all([
+    // Write a `.d.ts` file so TypeScript _just works_.
+    writeFile(
+      resolve(serverOutDir, serverOutput.fileName.replace(/\.js$/, ".d.ts")),
+      buildServerDts()
+    ),
+    // Ensure the `server.js` file is loaded as ESM.
+    writeFile(resolve(serverOutDir, "package.json"), `{"type":"module"}`),
+    // Write list of static assets copied to public directory.
+    writeFile(
+      resolve(serverOutDir, "public.json"),
+      JSON.stringify(publicAssets)
+    ),
+  ]);
 
   return undefined;
 }
@@ -385,7 +403,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     ...DEFAULT_VITE_CONFIG,
     root: options.root,
     mode: "development",
-    publicDir: options.publicDir,
+    publicDir: resolve(options.root, options.publicDir ?? DEFAULT_PUBLIC_DIR),
     plugins: [sitePagePlugin("development", () => cache?.list.app), react()],
     build: {
       target: options.target,
@@ -521,4 +539,25 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
  */
 function load(vite: ViteDevServer, path: string) {
   return () => vite.ssrLoadModule(path) as Promise<unknown>;
+}
+
+/**
+ * Copy directory from one location to another.
+ */
+async function copyDir(
+  from: string,
+  to: string,
+  onFile: (file: string) => boolean
+) {
+  for (const file of await readdir(from)) {
+    const srcFile = resolve(from, file);
+    const destFile = resolve(to, file);
+    const stats = await stat(srcFile);
+    if (stats.isDirectory()) {
+      await copyDir(srcFile, destFile, onFile);
+    } else {
+      const shouldCopy = onFile(srcFile);
+      if (shouldCopy) await copyFile(srcFile, destFile);
+    }
+  }
 }

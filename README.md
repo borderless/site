@@ -65,6 +65,7 @@ Lists the files used to build the project. The pages are all in root and follow 
 Useful scripts are in `package.json` under scripts. You can build, test, and format the project. Additionally you can run examples locally using `ts-node`:
 
 ```
+npm run example:test -- build
 npm run example:test -- dev
 ```
 
