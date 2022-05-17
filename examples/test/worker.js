@@ -7,11 +7,14 @@ addEventListener("fetch", (event) => {
 async function handleRequest(request) {
   const url = new URL(request.url);
 
-  const res = await server({
+  const res = await server(
+    {
       pathname: url.pathname,
-      search: new Map(url.searchParams.entries()),
-      headers: new Map(request.headers.entries()),
-  }, undefined);
+      search: url.searchParams,
+      headers: request.headers,
+    },
+    undefined
+  );
 
   return new Response(res.body ? await res.body.readableStream() : null, {
     status: res.status,

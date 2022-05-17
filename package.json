@@ -23,15 +23,16 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
-    "./dev": "./dist/dev.js",
-    "./head": "./dist/head.js",
-    "./client": "./dist/client.js",
-    "./server": "./dist/server.js",
-    "./shared": "./dist/shared.js",
     "./404": "./dist/404.js",
-    "./error": "./dist/error.js",
     "./app": "./dist/app.js",
-    "./document": "./dist/document.js"
+    "./client": "./dist/client.js",
+    "./dev": "./dist/dev.js",
+    "./document": "./dist/document.js",
+    "./error": "./dist/error.js",
+    "./head": "./dist/head.js",
+    "./node": "./dist/node.js",
+    "./server": "./dist/server.js",
+    "./shared": "./dist/shared.js"
   },
   "engines": {
     "node": ">=12"

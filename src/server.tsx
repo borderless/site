@@ -471,11 +471,12 @@ class ReactBody<P, C> implements Body {
   }
 
   async nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
-    const { prefix, suffix, stream } = await this.rawNodeStream({
-      ...options,
-      onReady: () => proxy.write(suffix),
+    const { prefix, suffix, stream } = await this.rawNodeStream(options);
+    const proxy = new PassThrough({
+      flush(cb) {
+        return cb(null, suffix);
+      },
     });
-    const proxy = new PassThrough();
     proxy.write(prefix);
     stream.pipe(proxy);
     return proxy;

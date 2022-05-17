@@ -1,11 +1,23 @@
+export interface Headers {
+  get(name: string): string | null;
+  getAll(name: string): string[];
+}
+
+export interface SearchParams {
+  get(name: string): string | null;
+  getAll(name: string): string[];
+}
+
 /**
  * Simple `Request` interface for rendering a page.
  */
 export interface Request {
   pathname: string;
-  search: ReadonlyMap<string, string>;
-  headers: ReadonlyMap<string, string | string[] | undefined>;
+  search: SearchParams;
+  headers: Headers;
 }
+
+export type Params = ReadonlyMap<string, string>;
 
 /**
  * The context send to `getServerSideProps`.
@@ -13,17 +25,15 @@ export interface Request {
 export interface ServerSidePropsContext<C> {
   route: string;
   request: Request;
-  params: ReadonlyMap<string, string>;
+  params: Params;
   context: C;
 }
 
 /**
  * The context used on the error page.
  */
-export interface ServerSidePropsErrorContext<C> {
-  request: Request;
-  params: ReadonlyMap<string, string>;
-  context: C;
+export interface ServerSidePropsErrorContext<C>
+  extends ServerSidePropsContext<C> {
   error: unknown;
 }
 

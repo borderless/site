@@ -23,7 +23,7 @@ import {
   NodeStream,
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
-import type { Request } from "./index.js";
+import { fromNodeRequest } from "./node.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "es2016";
@@ -453,15 +453,14 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
 
   // The server gets dynamic site instances and injects the Vite transform into HTML.
   const server = async (
-    req: Request,
-    url: string
+    req: IncomingMessage
   ): Promise<{
     status: number;
     headers: ReadonlyMap<string, string>;
     data: NodeStream | null;
   }> => {
     const { site } = cache ?? reloadCache();
-    const response = await site(req, {});
+    const response = await site(fromNodeRequest(req), {});
 
     if (
       !response.body ||
@@ -479,6 +478,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     const buffer = new PassThrough();
     const outlet = `<!-- @@SSR_OUTLET@@ -->`;
     const { prefix, suffix, stream } = await response.body.rawNodeStream();
+    const url = req.url ?? "";
     const html = await vite.transformIndexHtml(url, prefix + outlet + suffix);
     const [htmlPrefix, htmlSuffix] = html.split(outlet);
     proxy.write(htmlPrefix);
@@ -504,15 +504,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
         return;
       }
 
-      const originalUrl = req.url ?? "";
-      const url = new URL(originalUrl, `http://${req.headers.host}`);
-      const request: Request = {
-        pathname: url.pathname,
-        search: new Map(url.searchParams),
-        headers: new Map(Object.entries(req.headers)),
-      };
-
-      server(request, originalUrl)
+      server(req)
         .then((response) => {
           res.statusCode = response.status;
           for (const [key, value] of response.headers) {
