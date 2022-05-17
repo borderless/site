@@ -1,7 +1,6 @@
 import { watch } from "chokidar";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
-import { URL } from "node:url";
 import { writeFile, readdir, stat, copyFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import {
