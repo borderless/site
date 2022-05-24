@@ -24,10 +24,13 @@ export const DataLoaderContext = createContext<DataLoaderValue>(
  */
 export interface PageData {
   props: object;
-  formData?: object;
+  formData: object | undefined;
 }
 
 /**
  * Allow access to server-side props on the client and server.
  */
-export const PageDataContext = createContext<PageData>({ props: {} });
+export const PageDataContext = createContext<PageData>({
+  props: {},
+  formData: undefined,
+});

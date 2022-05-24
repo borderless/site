@@ -14,11 +14,11 @@ app.get("*", async (req, res, next) => {
       res.setHeader(key, value);
     }
 
-    if (response.body) {
+    if (typeof response.body === "object") {
       const stream = await response.body.nodeStream();
       stream.pipe(res);
     } else {
-      res.end();
+      res.end(response.body);
     }
   } catch (err) {
     next(err);

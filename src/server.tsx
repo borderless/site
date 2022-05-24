@@ -6,7 +6,7 @@ import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
 import { FilledContext, HelmetProvider } from "react-helmet-async";
 import { PassThrough } from "stream";
-import { GLOBAL_PAGE_DATA, GLOBAL_PAGE_CACHE } from "./common.js";
+import { GLOBAL_PAGE_DATA } from "./common.js";
 import {
   PageData,
   PageDataContext,
@@ -23,7 +23,6 @@ import {
 } from "./index.js";
 import type { AppProps } from "./app.js";
 import type { HeadOptions, TailOptions } from "./document.js";
-import type { Cache } from "./cache.js";
 
 export type OnError = (error: unknown) => void;
 
@@ -249,7 +248,6 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     const loader = getLoader(server, serverSideContext);
 
     try {
-      const cache = new Map();
       const helmetContext = {};
       const Component = must(
         page.default,
@@ -265,12 +263,12 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
 
           return render(<Component />, 404, {
             route,
-            cache,
             helmetContext,
             serverSideProps,
             loader,
             renderHead,
             renderTail,
+            formData: undefined,
           });
         }
 
@@ -295,13 +293,12 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
           );
 
           return render(
-            <App cache={cache}>
+            <App>
               <Component />
             </App>,
             200,
             {
               route,
-              cache,
               helmetContext,
               serverSideProps,
               loader,
@@ -338,18 +335,18 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
         );
 
         return render(
-          <App cache={cache}>
+          <App>
             <Component />
           </App>,
           200,
           {
             route,
-            cache,
             helmetContext,
             serverSideProps,
             loader,
             renderHead,
             renderTail,
+            formData: undefined,
           }
         );
       }
@@ -377,12 +374,12 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
 
       return render(<Component />, 500, {
         route,
-        cache: new Map(),
         helmetContext: {},
         serverSideProps,
         loader,
         renderHead,
         renderTail,
+        formData: undefined,
       });
     }
   };
@@ -476,11 +473,10 @@ function createPageRouter<C>(
  */
 interface RenderContext<C> {
   route: Route<C>;
-  cache: Cache;
   helmetContext: {};
-  serverSideProps: ServerSideProps<{}>;
   loader: DataLoaderValue;
-  formData?: object;
+  formData: object | undefined;
+  serverSideProps: ServerSideProps<{}> | undefined;
   renderHead: (options: HeadOptions) => string;
   renderTail: (options: TailOptions) => string;
 }
@@ -493,7 +489,7 @@ async function render<C>(
   initialStatus: number,
   context: RenderContext<C>
 ): Promise<Response> {
-  const { redirect, status } = context.serverSideProps;
+  const { redirect, status } = context.serverSideProps ?? {};
 
   // Skip rendering props when `redirect` is returned.
   if (redirect) {
@@ -553,7 +549,7 @@ class ReactBody<C> implements Body {
 
   getApp() {
     const pageData: PageData = {
-      props: this.context.serverSideProps.props,
+      props: this.context.serverSideProps?.props ?? {},
       formData: this.context.formData,
     };
 
@@ -607,31 +603,7 @@ class ReactBody<C> implements Body {
   }
 
   renderSuffix(): string {
-    const { cache } = this.context;
-
-    // Only append cache to page when it's populated. Saves bytes when the
-    // feature is completely unused. The default cache is empty anyway.
-    const script = cache.size
-      ? `<script>window.${GLOBAL_PAGE_CACHE}=${stringifyForScript(
-          Array.from(this.context.cache.entries())
-        )}</script>`
-      : "";
-
-    return this.context.renderTail({ script });
-  }
-
-  renderOptions(
-    pageData: PageData
-  ): ReactDOM.RenderToReadableStreamOptions &
-    ReactDOM.RenderToPipeableStreamOptions {
-    const { scriptUrl } = this.context.route;
-    if (!scriptUrl) return {};
-
-    const content = JSON.stringify(pageData);
-    return {
-      bootstrapModules: [scriptUrl],
-      bootstrapScriptContent: `window.${GLOBAL_PAGE_DATA}=${content}`,
-    };
+    return this.context.renderTail({ script: "" });
   }
 
   rawReadableStream(

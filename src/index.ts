@@ -112,7 +112,7 @@ export function useServerSideProps<T extends object>(): T {
  * Access to the result of form submission.
  */
 export function useFormData<T>(): T | undefined {
-  return (useContext(PageDataContext) as PageData).formData as T;
+  return (useContext(PageDataContext) as PageData).formData as T | undefined;
 }
 
 /**

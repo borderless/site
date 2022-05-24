@@ -8,9 +8,9 @@ const items = [
   },
 ];
 
-export async function loader(ctx) {
+export async function getServerSideProps(ctx) {
   await setTimeout(DELAY);
-  return items;
+  return { props: items };
 }
 
 export async function form(ctx) {

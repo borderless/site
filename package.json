@@ -24,7 +24,6 @@
   "exports": {
     ".": "./dist/index.js",
     "./app": "./dist/app.js",
-    "./cache": "./dist/cache.js",
     "./client": "./dist/client.js",
     "./common": "./dist/common.js",
     "./dev": "./dist/dev.js",

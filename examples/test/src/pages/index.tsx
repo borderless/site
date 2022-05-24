@@ -1,10 +1,8 @@
-import useSwr from "swr";
-import { useLoader, useFormData } from "@borderless/site";
+import { useServerSideProps, useFormData } from "@borderless/site";
 
 export default function Home() {
-  const loader = useLoader();
+  const data = useServerSideProps();
   const form = useFormData();
-  const { data } = useSwr([true], loader);
 
   return (
     <div>
