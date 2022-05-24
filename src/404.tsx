@@ -1,9 +1,7 @@
 import React from "react";
 import Head from "./head.js";
 
-export interface NotFoundProps {}
-
-export default function NotFound(props: NotFoundProps) {
+export default function NotFound() {
   return (
     <div
       style={{

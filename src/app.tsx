@@ -1,10 +1,10 @@
 import React from "react";
 
-export interface AppProps<P> {
-  Component: React.ComponentType<P>;
-  props: P;
+export interface AppProps {
+  cache?: Map<string, object>;
+  children: React.ReactNode;
 }
 
-export default function App({ Component, props }: AppProps<{}>) {
-  return <Component {...props} />;
+export default function App({ children }: AppProps) {
+  return <>{children}</>;
 }

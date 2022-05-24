@@ -2,7 +2,6 @@ import { watch } from "chokidar";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
 import { writeFile, readdir, stat, copyFile } from "node:fs/promises";
-import { PassThrough } from "node:stream";
 import {
   createServer as createViteServer,
   build as buildVite,
@@ -12,8 +11,7 @@ import {
   normalizePath,
 } from "vite";
 import react from "@vitejs/plugin-react";
-import {
-  createServer as createSiteServer,
+import type {
   Server,
   AppModule,
   DocumentModule,
@@ -23,6 +21,7 @@ import {
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import { fromNodeRequest } from "./node.js";
+import { Request } from "./index.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "es2016";
@@ -57,6 +56,18 @@ const SITE_PAGE_MODULE_PREFIX = "/@site";
  * Static ID for generating the server-side module.
  */
 const SITE_SERVER_MODULE_ID = "/@site-server";
+
+/**
+ * Vite.js development script needed in the `<head>` element.
+ */
+const DEV_MODE_HEAD = `<script type="module" src="/@vite/client"></script>
+<script type="module">
+import RefreshRuntime from "/@react-refresh"
+RefreshRuntime.injectIntoGlobalHook(window)
+window.$RefreshReg$ = () => {}
+window.$RefreshSig$ = () => (type) => type
+window.__vite_plugin_react_preamble_installed__ = true
+</script>`;
 
 /**
  * Generate the dynamic site entry file name from a path.
@@ -111,17 +122,18 @@ function buildServerScript(
     return path ? `{ module: ${stringifyImport(path)} }` : "undefined";
   };
 
-  const stringifyServerPage = (path: string | undefined) => {
-    if (!path) return "undefined";
+  const stringifyServerPage = (page: ListPage | undefined) => {
+    if (!page) return "undefined";
+    const { path = "", serverPath } = page;
     const { viteMetadata, fileName } = getVitePageOutput(path);
     const url = base + fileName;
     const css = Array.from(viteMetadata.importedCss).map((x) => base + x);
-    return `{ module: ${stringifyImport(path)}, url: ${JSON.stringify(
-      url
-    )}, css: ${JSON.stringify(css)} }`;
+    return `{ module: ${stringifyImport(path)}, serverModule: ${
+      serverPath ? stringifyImport(serverPath) : "undefined"
+    }, url: ${JSON.stringify(url)}, css: ${JSON.stringify(css)} }`;
   };
 
-  const stringifyPages = (pages: Record<string, string>) => {
+  const stringifyPages = (pages: Record<string, ListPage>) => {
     const pagesString = Object.entries(pages)
       .map(([route, path]) => {
         return `${JSON.stringify(route)}: ${stringifyServerPage(path)}`;
@@ -194,10 +206,15 @@ export interface ListOptions {
   src: string;
 }
 
+export interface ListPage {
+  path?: string;
+  serverPath?: string;
+}
+
 export interface List {
-  pages: Record<string, string>;
-  error?: string;
-  notFound?: string;
+  pages: Record<string, ListPage>;
+  error?: ListPage;
+  notFound?: ListPage;
   app?: string;
   document?: string;
 }
@@ -205,8 +222,9 @@ export interface List {
 function getChokidar(cwd: string, persistent = true) {
   return watch(
     [
-      ...EXTENSIONS.map((x) => `pages/**/index.${x}`),
-      ...EXTENSIONS.map((x) => `_@(document|app|error|404).${x}`),
+      ...EXTENSIONS.map((x) => `pages/**/index?(.server).${x}`),
+      ...EXTENSIONS.map((x) => `_@(error|404)?(.server).${x}`),
+      ...EXTENSIONS.map((x) => `_@(document|app).${x}`),
     ],
     { cwd, persistent }
   );
@@ -215,20 +233,30 @@ function getChokidar(cwd: string, persistent = true) {
 function filesToList(cwd: string, files: Iterable<string>) {
   const list: List = { pages: {} };
 
+  // Add server vs client variants of the page.
+  const addPage = (existingPage: ListPage = {}, file: string) => {
+    if (file.indexOf(".server.") > -1) {
+      existingPage.serverPath = file;
+    } else {
+      existingPage.path = file;
+    }
+    return existingPage;
+  };
+
   for (const file of files) {
     const path = resolve(cwd, file);
 
     if (file.startsWith("pages/")) {
       const route = file.slice(6, file.lastIndexOf("/"));
-      list.pages[route] = path;
+      list.pages[route] = addPage(list.pages[route], path);
+    } else if (file.startsWith("_error.")) {
+      list.error = addPage(list.error, path);
+    } else if (file.startsWith("_404.")) {
+      list.notFound = addPage(list.notFound, path);
     } else if (file.startsWith("_document.")) {
       list.document = path;
     } else if (file.startsWith("_app.")) {
       list.app = path;
-    } else if (file.startsWith("_error.")) {
-      list.error = path;
-    } else if (file.startsWith("_404.")) {
-      list.notFound = path;
     } else {
       throw new TypeError(`Unhandled file: ${file}`);
     }
@@ -294,7 +322,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
       target: client.target ?? DEFAULT_CLIENT_TARGET,
       sourcemap: options.sourceMap,
       rollupOptions: {
-        input: pagePaths.map((x) => vitePageEntry(options.root, x)),
+        input: pagePaths.map((x) => vitePageEntry(options.root, x.path ?? "")),
       },
       outDir: clientOutDir,
     },
@@ -411,20 +439,22 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     server: { middlewareMode: "ssr" },
   });
 
-  const loadServerModule = <P>(path: string): ServerFile<P> => {
-    return { module: load(vite, path) } as ServerFile<P>;
+  const loadServerModule = <T>(path: string): ServerFile<T> => {
+    return { module: load(vite, path) } as ServerFile<T>;
   };
 
-  const loadServerPage = <P>(path: string): ServerPage<P, DevServerContext> => {
+  const loadServerPage = (page: ListPage): ServerPage<DevServerContext> => {
+    const { path = "", serverPath = "" } = page;
     return {
       url: vitePageEntry(options.root, path),
       module: load(vite, path),
-    } as ServerPage<P, DevServerContext>;
+      serverModule: serverPath ? load(vite, serverPath) : undefined,
+    } as ServerPage<DevServerContext>;
   };
 
-  const loadPages = <P>(pages: Record<string, string>) => {
+  const loadPages = (pages: Record<string, ListPage>) => {
     return Object.fromEntries(
-      Object.entries(pages).map<[string, ServerPage<P, DevServerContext>]>(
+      Object.entries(pages).map<[string, ServerPage<DevServerContext>]>(
         ([route, path]) => {
           return [route, loadServerPage(path)];
         }
@@ -432,13 +462,16 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     );
   };
 
+  // Must use the same loader for all dependencies to ensure shared modules.
+  const siteServer = await vite.ssrLoadModule(SITE_SERVER_IMPORT_NAME);
+
   const reloadCache = () => {
     const list = filesToList(cwd, files);
-    const site = createSiteServer({
+    const site = siteServer.createServer({
       pages: loadPages(list.pages),
       error: list.error ? loadServerPage(list.error) : undefined,
       notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
-      app: list.app ? loadServerModule<AppModule<object>>(list.app) : undefined,
+      app: list.app ? loadServerModule<AppModule>(list.app) : undefined,
       document: list.document
         ? loadServerModule<DocumentModule>(list.document)
         : undefined,
@@ -452,45 +485,31 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
 
   // The server gets dynamic site instances and injects the Vite transform into HTML.
   const server = async (
-    req: IncomingMessage
+    request: Request
   ): Promise<{
     status: number;
     headers: ReadonlyMap<string, string>;
-    data: NodeStream | null;
+    data: NodeStream | string | undefined;
   }> => {
     const { site } = cache ?? reloadCache();
-    const response = await site(fromNodeRequest(req), {});
+    const response = await site(request, {});
 
-    if (
-      !response.body ||
-      response.headers.get("content-type") !== "text/html"
-    ) {
+    if (response.body === undefined || typeof response.body === "string") {
       return {
         status: response.status,
         headers: response.headers,
-        data: response.body ? await response.body.nodeStream() : null,
+        data: response.body,
       };
     }
 
-    // Fake a valid HTML file for vite to inject whatever it needs around the stream.
-    const proxy = new PassThrough();
-    const buffer = new PassThrough();
-    const outlet = `<!-- @@SSR_OUTLET@@ -->`;
-    const { prefix, suffix, stream } = await response.body.rawNodeStream();
-    const url = req.url ?? "";
-    const html = await vite.transformIndexHtml(url, prefix + outlet + suffix);
-    const [htmlPrefix, htmlSuffix] = html.split(outlet);
-    proxy.write(htmlPrefix);
-    stream.pipe(buffer).pipe(proxy, { end: false });
-    buffer.on("end", () => {
-      proxy.write(htmlSuffix);
-      proxy.end();
+    const stream = await response.body.nodeStream({
+      head: DEV_MODE_HEAD,
     });
 
     return {
       status: response.status,
       headers: response.headers,
-      data: proxy,
+      data: stream,
     };
   };
 
@@ -503,16 +522,16 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
         return;
       }
 
-      server(req)
+      server(fromNodeRequest(req))
         .then((response) => {
           res.statusCode = response.status;
           for (const [key, value] of response.headers) {
             res.setHeader(key, value);
           }
-          if (response.data) {
+          if (typeof response.data === "object") {
             response.data.pipe(res);
           } else {
-            res.end();
+            res.end(response.data);
           }
         })
         .catch((err) => {

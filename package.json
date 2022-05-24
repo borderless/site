@@ -23,26 +23,27 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
-    "./404": "./dist/404.js",
     "./app": "./dist/app.js",
+    "./cache": "./dist/cache.js",
     "./client": "./dist/client.js",
+    "./common": "./dist/common.js",
     "./dev": "./dist/dev.js",
     "./document": "./dist/document.js",
-    "./error": "./dist/error.js",
     "./head": "./dist/head.js",
     "./node": "./dist/node.js",
-    "./server": "./dist/server.js",
-    "./shared": "./dist/shared.js"
+    "./server": "./dist/server.js"
   },
   "engines": {
     "node": ">=12"
   },
   "scripts": {
+    "build": "ts-scripts build",
     "example:test": "npm run site -- --root examples/test",
     "format": "ts-scripts format",
     "lint": "ts-scripts lint",
-    "prepare": "ts-scripts install && ts-scripts build",
-    "site": "node --loader ts-node/esm src/bin.ts",
+    "prepare": "ts-scripts install",
+    "prepublishOnly": "npm run build",
+    "site": "node dist/bin.js",
     "specs": "ts-scripts specs",
     "test": "ts-scripts test"
   },
@@ -68,7 +69,9 @@
     "arg": "^5.0.0",
     "chokidar": "^3.5.2",
     "iterative": "^1.9.2",
+    "raw-body": "^2.5.1",
     "react-helmet-async": "^1.3.0",
+    "swr": "^1.3.0",
     "vite": "^2.9.7"
   },
   "devDependencies": {

@@ -1,42 +1,33 @@
-import React from "react";
-import { HelmetProvider } from "react-helmet-async";
-import type { AppProps } from "./app.js";
+import { createContext } from "react";
 
 /**
- * Context required for rendering the application on client or server.
+ * Throw a not implemented exception.
  */
-export interface AppContext {
-  helmetContext: { helmet: {} };
-}
+export const typeError = (message: string) => () => {
+  throw new TypeError(message);
+};
+
+/**
+ * Data loader context value.
+ */
+export type DataLoaderValue = (...args: unknown[]) => Promise<unknown>;
+
+/**
+ * The loader for requesting data from the server.
+ */
+export const DataLoaderContext = createContext<DataLoaderValue>(
+  typeError("Data loader not implemented")
+);
 
 /**
  * Data required for rendering a page.
  */
 export interface PageData {
-  props: unknown;
+  props: object;
+  formData?: object;
 }
 
 /**
- * Deterministic element ID for hydrating the page.
+ * Allow access to server-side props on the client and server.
  */
-export const PAGE_ELEMENT_ID = "__SITE__";
-
-/**
- * Deterministic element ID for getting the data needed to re-hydrate the page.
- */
-export const GLOBAL_PAGE_DATA = "__SITE_DATA__";
-
-/**
- * Client and server-side compatible app render function (sets up context).
- */
-export function renderApp<P>(
-  Component: React.ComponentType<AppProps<P>>,
-  props: AppProps<P>,
-  context: AppContext
-) {
-  return (
-    <HelmetProvider context={context.helmetContext}>
-      <Component {...props} />
-    </HelmetProvider>
-  );
-}
+export const PageDataContext = createContext<PageData>({ props: {} });

@@ -1,10 +1,12 @@
-import React from "react";
+import React, { Suspense } from "react";
+import { SWRConfig } from "swr";
 import { AppProps } from "@borderless/site";
+import { getCache } from "@borderless/site/cache";
 
-export default function App({ Component, props }: AppProps) {
+export default function App({ children, cache }: AppProps) {
   return (
-    <div style={{ backgroundColor: "yellow" }}>
-      <Component {...props} />
-    </div>
+    <SWRConfig value={{ provider: () => getCache(cache), suspense: true }}>
+      <Suspense>{children}</Suspense>
+    </SWRConfig>
   );
 }

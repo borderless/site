@@ -2,7 +2,7 @@
 
 import arg from "arg";
 import { createServer } from "node:http";
-import { list, build, dev } from "./dev.js";
+import { list, build, dev, ListPage } from "./dev.js";
 
 interface Options {
   root: string;
@@ -39,14 +39,14 @@ Lists the files used to build the project. The pages are all in root and follow 
 `);
   }
 
-  console.log(`App: ${app}`);
-  console.log(`Document: ${document}`);
-  console.log(`Error: ${error}`);
-  console.log(`404: ${notFound}`);
+  console.log(`App: ${JSON.stringify(app)}`);
+  console.log(`Document: ${JSON.stringify(document)}`);
+  console.log(`Error: ${JSON.stringify(error)}`);
+  console.log(`404: ${JSON.stringify(notFound)}`);
   console.log(`Pages (${Object.keys(pages).length} total):`);
 
   for (const [route, path] of Object.entries(pages)) {
-    console.log(`/${route} - ${path}`);
+    console.log(`/${route} - ${JSON.stringify(path)}`);
   }
 }
 

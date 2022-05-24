@@ -1,39 +1,87 @@
+import { useContext } from "react";
+import { PageDataContext, DataLoaderContext, PageData } from "./shared.js";
+
+/**
+ * Headers sent to the server for the request.
+ */
 export interface Headers {
   get(name: string): string | null;
   getAll(name: string): string[];
-}
-
-export interface SearchParams {
-  get(name: string): string | null;
-  getAll(name: string): string[];
+  has(name: string): boolean;
 }
 
 /**
- * Simple `Request` interface for rendering a page.
+ * Parameters sent using the query string to the server.
  */
-export interface Request {
+export interface SearchParams {
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string): boolean;
+}
+
+/**
+ * Parameters sent using form encoding to the server.
+ */
+export interface FormParams {
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string): boolean;
+}
+
+export enum RequestType {
+  UNKNOWN,
+  FORM,
+}
+
+/**
+ * Standard base request.
+ */
+export interface BaseRequest {
+  method: string;
+  type: RequestType;
   pathname: string;
   search: SearchParams;
   headers: Headers;
 }
 
-export type Params = ReadonlyMap<string, string>;
-
 /**
- * The context send to `getServerSideProps`.
+ * HTTP request for simply rendering the content (GET).
  */
-export interface ServerSidePropsContext<C> {
-  route: string;
-  request: Request;
-  params: Params;
-  context: C;
+export interface DefaultRequest extends BaseRequest {
+  type: RequestType.UNKNOWN;
 }
 
 /**
- * The context used on the error page.
+ * HTTP request for form processing (POST and `application/x-www-form-urlencoded`).
  */
-export interface ServerSidePropsErrorContext<C>
-  extends ServerSidePropsContext<C> {
+export interface FormRequest extends BaseRequest {
+  type: RequestType.FORM;
+  form: () => Promise<FormParams>;
+}
+
+/**
+ * Simple `Request` interface for rendering a page.
+ */
+export type Request = DefaultRequest | FormRequest;
+
+/**
+ * Parameters provided from matching path segments, e.g. `/[param]`.
+ */
+export type Params = ReadonlyMap<string, string>;
+
+/**
+ * The request context used for server side functions.
+ */
+export interface ServerSideContext<C> {
+  key: string;
+  request: Request;
+  params: Params;
+  context: C;
+  error?: unknown;
+  formData?: unknown;
+}
+
+export interface ServerSideErrorContext<C> extends ServerSideContext<C> {
   error: unknown;
 }
 
@@ -43,7 +91,6 @@ export interface ServerSidePropsErrorContext<C>
 export interface ServerSideProps<P> {
   props: P;
   status?: number;
-  headers?: Iterable<[string, string]>;
   redirect?: { url: string };
 }
 
@@ -51,5 +98,26 @@ export interface ServerSideProps<P> {
  * Function signature for `getServerSideProps`.
  */
 export type GetServerSideProps<P, C> = (
-  context: ServerSidePropsContext<C>
+  context: ServerSideContext<C>
 ) => ServerSideProps<P> | undefined | null;
+
+/**
+ * Access to the server-side props.
+ */
+export function useServerSideProps<T extends object>(): T {
+  return (useContext(PageDataContext) as PageData).props as T;
+}
+
+/**
+ * Access to the result of form submission.
+ */
+export function useFormData<T>(): T | undefined {
+  return (useContext(PageDataContext) as PageData).formData as T;
+}
+
+/**
+ * Access the data loader method, for use with something like `swr`.
+ */
+export function useLoader() {
+  return useContext(DataLoaderContext);
+}

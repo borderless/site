@@ -4,21 +4,26 @@ import React from "react";
 import * as ReactDOM from "react-dom/server";
 import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
-import AppComponent, { AppProps } from "./app.js";
-import renderDocument, { DocumentOptions } from "./document.js";
-import NotFoundComponent from "./404.js";
-import ErrorComponent, {
-  getServerSideProps as getServerSidePropsError,
-} from "./error.js";
-import { AppContext, GLOBAL_PAGE_DATA, renderApp, PageData } from "./shared.js";
-import { FilledContext } from "react-helmet-async";
+import { FilledContext, HelmetProvider } from "react-helmet-async";
 import { PassThrough } from "stream";
-import type {
+import { GLOBAL_PAGE_DATA, GLOBAL_PAGE_CACHE } from "./common.js";
+import {
+  PageData,
+  PageDataContext,
+  typeError,
+  DataLoaderValue,
+  DataLoaderContext,
+} from "./shared.js";
+import {
   ServerSideProps,
-  ServerSidePropsContext,
-  GetServerSideProps,
+  ServerSideContext,
   Request,
+  RequestType,
+  GetServerSideProps,
 } from "./index.js";
+import type { AppProps } from "./app.js";
+import type { HeadOptions, TailOptions } from "./document.js";
+import type { Cache } from "./cache.js";
 
 export type OnError = (error: unknown) => void;
 
@@ -30,11 +35,13 @@ export interface NodeStream {
 }
 
 export interface NodeStreamOptions {
+  head?: string;
   onError?: OnError;
   signal?: AbortSignal;
 }
 
 export interface ReadableStreamOptions {
+  head?: string;
   onError?: OnError;
   signal?: AbortSignal;
 }
@@ -44,16 +51,16 @@ export interface RawNodeStreamOptions extends NodeStreamOptions {
 }
 
 export interface RawNodeStream {
-  prefix: string;
-  suffix: string;
+  prefix: () => string;
+  suffix: () => string;
   stream: ReactDOM.PipeableStream;
 }
 
 export interface RawReadableStreamOptions extends ReadableStreamOptions {}
 
 export interface RawReadableStream {
-  prefix: Uint8Array;
-  suffix: Uint8Array;
+  prefix: () => Uint8Array;
+  suffix: () => Uint8Array;
   stream: ReactDOM.ReactDOMServerReadableStream;
 }
 
@@ -75,26 +82,45 @@ export interface Body {
 export interface Response {
   status: number;
   headers: ReadonlyMap<string, string>;
-  body: Body | null;
+  body: Body | string | undefined;
 }
 
 /**
- * The page component exports regular `default` component with `getServerSideProps`.
+ * The page component exports the component to be rendered as HTML.
  */
-export interface PageModule<P, C> {
-  default?: React.ComponentType<P>;
-  getServerSideProps?: GetServerSideProps<P, C>;
+export interface PageModule {
+  default?: React.ComponentType<{}>;
+}
+
+export type FormHandler<C> = (context: ServerSideContext<C>) => object;
+
+export type LoaderHandler<C> = (
+  context: ServerSideContext<C>,
+  ...args: unknown[]
+) => unknown | Promise<unknown>;
+
+/**
+ * The server module page allows creation of loader and form handling.
+ */
+export interface PageServerModule<C> {
+  getServerSideProps?: GetServerSideProps<{}, C>;
+  loader?: LoaderHandler<C>;
+  form?: FormHandler<C>;
 }
 
 /**
- * Server-side only modules don't support `getServerSideProps`.
+ * The application module exports a react component that wraps every page.
  */
-export interface AppModule<P> {
-  default: React.ComponentType<AppProps<P>>;
+export interface AppModule {
+  default: React.ComponentType<AppProps>;
 }
 
+/**
+ * The document module exports a function that returns the HTML header and footer.
+ */
 export interface DocumentModule {
-  default: (options: DocumentOptions) => [string, string];
+  renderHead: (options: HeadOptions) => string;
+  renderTail: (options: TailOptions) => string;
 }
 
 /**
@@ -112,8 +138,9 @@ export interface ServerFile<T> {
 /**
  * Server-side page component.
  */
-export interface ServerPage<P, C> {
-  module: ServerLoader<PageModule<P, C>>;
+export interface ServerPage<C> {
+  module: ServerLoader<PageModule>;
+  serverModule?: ServerLoader<PageServerModule<C>>;
   url?: string;
   css?: string[];
 }
@@ -122,10 +149,10 @@ export interface ServerPage<P, C> {
  * Create a server instance from pages.
  */
 export interface ServerOptions<C> {
-  pages: Record<string, ServerPage<{}, C>>;
-  error?: ServerPage<{}, C>;
-  notFound?: ServerPage<{}, C>;
-  app?: ServerFile<AppModule<{}>>;
+  pages: Record<string, ServerPage<C>>;
+  error?: ServerPage<C>;
+  notFound?: ServerPage<C>;
+  app?: ServerFile<AppModule>;
   document?: ServerFile<DocumentModule>;
 }
 
@@ -141,37 +168,38 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
   const router = createPageRouter(options.pages);
 
   // The error page is the fallback component used when something breaks.
-  const errorPage = options.error
+  const errorRoute: Route<C> = options.error
     ? {
         key: "_error",
         module: fn(options.error.module),
+        serverModule: fn(options.error.serverModule ?? {}),
         scriptUrl: options.error.url,
         cssUrls: options.error.css,
         params: new Map(),
       }
     : {
         key: "_error",
-        module: fn<object>({
-          default: ErrorComponent,
-          getServerSideProps: getServerSidePropsError,
-        }),
+        module: fn<object>(import("./error.js")),
+        serverModule: fn(import("./error.server.js")),
         scriptUrl: undefined,
         cssUrls: undefined,
         params: new Map(),
       };
 
   // The not found page is a fallback component used to render.
-  const notFoundPage = options.notFound
+  const notFoundRoute: Route<C> = options.notFound
     ? {
         key: "_404",
         module: fn(options.notFound.module),
+        serverModule: fn(options.notFound.serverModule ?? {}),
         scriptUrl: options.notFound.url,
         cssUrls: options.notFound.css,
         params: new Map(),
       }
     : {
         key: "_404",
-        module: fn({ default: NotFoundComponent }),
+        module: fn(import("./404.js")),
+        serverModule: fn({}),
         scriptUrl: undefined,
         cssUrls: undefined,
         params: new Map(),
@@ -182,46 +210,218 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     ? {
         module: fn(options.app.module),
       }
-    : { module: fn({ default: AppComponent }) };
+    : { module: fn(import("./app.js")) };
 
   // The document component is used to wrap the output HTML server-side.
   const serverDocument = options.document
     ? {
         module: fn(options.document.module),
       }
-    : { module: fn({ default: renderDocument }) };
+    : { module: fn(import("./document.js")) };
 
   return async function server(request, context) {
     const pathname = request.pathname.slice(1);
-    const serverPage = router(pathname) ?? notFoundPage;
+    const route = router(pathname) ?? notFoundRoute;
 
-    const [page, app, document] = await Promise.all([
-      serverPage.module(),
+    const [page, server, app, document] = await Promise.all([
+      route.module(),
+      route.serverModule(),
       serverApp.module(),
       serverDocument.module(),
-    ]);
+    ] as const);
 
-    const { key: route, params } = serverPage;
-    const options: ServerSidePropsContext<C> = {
-      route,
+    const renderHead = must(
+      document.renderHead,
+      `The "_document" module is missing the "renderHead" export`
+    );
+    const renderTail = must(
+      document.renderTail,
+      `The "_document" module is missing the "renderTail" export`
+    );
+
+    const { key, params } = route;
+    const serverSideContext: ServerSideContext<C> = {
+      key,
       request,
       context,
       params,
     };
+    const loader = getLoader(server, serverSideContext);
 
     try {
-      const status = serverPage === notFoundPage ? 404 : 200;
-      const serverSideProps = await getServerSideProps(page, options);
-      return render(document, app, page, serverSideProps, status, serverPage);
-    } catch (error) {
-      const page = await errorPage.module();
-      const serverSideProps = await getServerSideProps<{}, C>(
-        page,
-        Object.assign(options, { error })
+      const cache = new Map();
+      const helmetContext = {};
+      const Component = must(
+        page.default,
+        `The page for "${route.key}" module is missing a default export`
       );
-      return render(document, app, page, serverSideProps, 500, errorPage);
+
+      if (route === notFoundRoute) {
+        if (request.method === "GET") {
+          const serverSideProps = await getServerSideProps(
+            server,
+            serverSideContext
+          );
+
+          return render(<Component />, 404, {
+            route,
+            cache,
+            helmetContext,
+            serverSideProps,
+            loader,
+            renderHead,
+            renderTail,
+          });
+        }
+
+        return {
+          status: 404,
+          headers: new Map(),
+          body: undefined,
+        };
+      }
+
+      const App = must(
+        app.default,
+        `The "_app" module is missing a default export`
+      );
+
+      if (request.method === "POST" && typeof server.form === "function") {
+        if (request.type === RequestType.FORM) {
+          const formData = await server.form(serverSideContext);
+          const serverSideProps = await getServerSideProps(
+            server,
+            serverSideContext
+          );
+
+          return render(
+            <App cache={cache}>
+              <Component />
+            </App>,
+            200,
+            {
+              route,
+              cache,
+              helmetContext,
+              serverSideProps,
+              loader,
+              formData,
+              renderHead,
+              renderTail,
+            }
+          );
+        }
+
+        return {
+          status: 415,
+          headers: new Map(),
+          body: undefined,
+        };
+      }
+
+      if (request.method === "GET") {
+        // Handle loader requests as JSON responses.
+        if (request.search.get("__site__") === "1") {
+          const args = request.search.getAll("data").map((x) => JSON.parse(x));
+          const data = await loader(...args);
+
+          return {
+            status: 200,
+            headers: new Map([["content-type", "application/json"]]),
+            body: JSON.stringify(data),
+          };
+        }
+
+        const serverSideProps = await getServerSideProps(
+          server,
+          serverSideContext
+        );
+
+        return render(
+          <App cache={cache}>
+            <Component />
+          </App>,
+          200,
+          {
+            route,
+            cache,
+            helmetContext,
+            serverSideProps,
+            loader,
+            renderHead,
+            renderTail,
+          }
+        );
+      }
+
+      return {
+        status: 405,
+        headers: new Map([["allow", generateAllowHeader(server)]]),
+        body: undefined,
+      };
+    } catch (error) {
+      const [page, server] = await Promise.all([
+        errorRoute.module(),
+        errorRoute.serverModule(),
+      ] as const);
+
+      const Component = must(
+        page.default,
+        `The page for "${route.key}" module is missing a default export`
+      );
+
+      const serverSideProps = await getServerSideProps(
+        server,
+        Object.assign(serverSideContext, { error })
+      );
+
+      return render(<Component />, 500, {
+        route,
+        cache: new Map(),
+        helmetContext: {},
+        serverSideProps,
+        loader,
+        renderHead,
+        renderTail,
+      });
     }
   };
+}
+
+/**
+ * Generate the list of allowed methods for unknown request types.
+ */
+function generateAllowHeader<C>(server: PageServerModule<C>): string {
+  const allow = ["GET"];
+  if (typeof server.form === "function") allow.push("POST");
+  return allow.join(",");
+}
+
+/**
+ * Get the data loader for the current route.
+ */
+function getLoader<C>(
+  server: PageServerModule<C>,
+  context: ServerSideContext<C>
+): DataLoaderValue {
+  const serverLoader =
+    server.loader ??
+    typeError(`Missing a data loader implementation: ${context.key}`);
+  return async (...args) => serverLoader(context, ...args);
+}
+
+/**
+ * Get the server-side props for the current route.
+ */
+async function getServerSideProps<C>(
+  server: PageServerModule<C>,
+  context: ServerSideContext<C>
+) {
+  return (
+    (await server.getServerSideProps?.(context)) ?? {
+      props: {},
+    }
+  );
 }
 
 type Loader<T> = () => T | Promise<T>;
@@ -229,9 +429,10 @@ type Loader<T> = () => T | Promise<T>;
 /**
  * Route matches return information needed to render.
  */
-type Route<P, C> = {
+type Route<C> = {
   key: string;
-  module: Loader<PageModule<P, C>>;
+  module: Loader<PageModule>;
+  serverModule: Loader<PageServerModule<C>>;
   scriptUrl: string | undefined;
   cssUrls: string[] | undefined;
   params: ReadonlyMap<string, string>;
@@ -241,18 +442,16 @@ type Route<P, C> = {
  * Create a router for matching path names to pages.
  */
 function createPageRouter<C>(
-  pages: Record<string, ServerPage<{}, C>>
-): (pathname: string) => Route<{}, C> | undefined {
+  pages: Record<string, ServerPage<C>>
+): (pathname: string) => Route<C> | undefined {
   const routes = new Map(
     Object.entries(pages).map(
-      ([key, contents]): [
-        string,
-        Pick<Route<{}, C>, "module" | "scriptUrl" | "cssUrls">
-      ] => {
+      ([key, contents]): [string, Omit<Route<C>, "key" | "params">] => {
         return [
           key,
           {
             module: fn(contents.module),
+            serverModule: fn(contents.serverModule ?? {}),
             scriptUrl: contents.url,
             cssUrls: contents.css,
           },
@@ -265,57 +464,50 @@ function createPageRouter<C>(
 
   return (pathname) => {
     for (const { route, keys, values } of router(pathname)) {
-      const { module, scriptUrl, cssUrls } = routes.get(route)!;
+      const { module, serverModule, scriptUrl, cssUrls } = routes.get(route)!;
       const params = new Map(zip(keys, map(values, decode)));
-      return { key: route, module, scriptUrl, params, cssUrls };
+      return { key: route, module, serverModule, scriptUrl, params, cssUrls };
     }
   };
 }
 
 /**
- * Utility function for loading props from a page module.
+ * Context required for rendering the application on client or server.
  */
-async function getServerSideProps<P, C>(
-  page: PageModule<P, C>,
-  context: ServerSidePropsContext<C>
-): Promise<ServerSideProps<P>> {
-  return page.getServerSideProps?.(context) ?? { props: {} as P };
+interface RenderContext<C> {
+  route: Route<C>;
+  cache: Cache;
+  helmetContext: {};
+  serverSideProps: ServerSideProps<{}>;
+  loader: DataLoaderValue;
+  formData?: object;
+  renderHead: (options: HeadOptions) => string;
+  renderTail: (options: TailOptions) => string;
 }
 
 /**
  * Server render the page.
  */
-async function render<P, C>(
-  document: DocumentModule,
-  app: AppModule<P>,
-  page: PageModule<P, C>,
-  serverSideProps: ServerSideProps<P>,
+async function render<C>(
+  element: JSX.Element,
   initialStatus: number,
-  route: Route<P, C>
+  context: RenderContext<C>
 ): Promise<Response> {
-  const { props, redirect, status, headers } = serverSideProps;
+  const { redirect, status } = context.serverSideProps;
 
   // Skip rendering props when `redirect` is returned.
   if (redirect) {
     return {
       status: status ?? 302,
-      headers: new Map([...(headers || []), ["location", redirect.url]]),
-      body: null,
+      headers: new Map([["location", redirect.url]]),
+      body: undefined,
     };
   }
 
-  const AppComponent = require(app.default, `The "_app" module is missing a default export`);
-  const Component = require(page.default, `The page for "${route.key}" module is missing a default export`);
-  const template = require(document.default, `The "_document" module is missing a default export`);
-
-  const appProps: AppProps<P> = { Component, props };
-  const appContext: AppContext = { helmetContext: { helmet: {} } };
-  const appElement = renderApp<P>(AppComponent, appProps, appContext);
-
   return {
     status: status ?? initialStatus,
-    headers: new Map([...(headers || []), ["content-type", "text/html"]]),
-    body: new ReactBody(appElement, template, props, appContext, route),
+    headers: new Map([["content-type", "text/html"]]),
+    body: new ReactBody(element, context),
   };
 }
 
@@ -340,7 +532,7 @@ function fn<T extends object>(value: T | (() => T)): () => T {
 /**
  * Asserts that a value is defined.
  */
-function require<T>(value: T | null | undefined, message: string): T {
+function must<T>(value: T | null | undefined, message: string): T {
   if (value == null) throw new TypeError(message);
   return value;
 }
@@ -356,65 +548,107 @@ const logger =
 /**
  * React body renderer that supports multiple ways of returning the application.
  */
-class ReactBody<P, C> implements Body {
-  constructor(
-    private app: JSX.Element,
-    private template: (options: DocumentOptions) => [string, string],
-    private props: P,
-    private context: AppContext,
-    private route: Route<P, C>
-  ) {}
+class ReactBody<C> implements Body {
+  constructor(private page: JSX.Element, private context: RenderContext<C>) {}
 
-  getDocumentOptions(): DocumentOptions {
-    const { helmet } = this.context.helmetContext as FilledContext;
+  getApp() {
+    const pageData: PageData = {
+      props: this.context.serverSideProps.props,
+      formData: this.context.formData,
+    };
+
+    const app = (
+      <HelmetProvider context={this.context.helmetContext}>
+        <PageDataContext.Provider value={pageData}>
+          <DataLoaderContext.Provider value={this.context.loader}>
+            {this.page}
+          </DataLoaderContext.Provider>
+        </PageDataContext.Provider>
+      </HelmetProvider>
+    );
+
+    const { scriptUrl } = this.context.route;
+    const renderOptions = scriptUrl
+      ? {
+          bootstrapModules: [scriptUrl],
+          bootstrapScriptContent: `window.${GLOBAL_PAGE_DATA}=${stringifyForScript(
+            pageData
+          )}`,
+        }
+      : undefined;
+
+    return { app, renderOptions };
+  }
+
+  renderPrefix(initialHead: string): string {
+    const { helmetContext, route } = this.context;
+    const { helmet } = helmetContext as FilledContext;
 
     const htmlAttributes = helmet.htmlAttributes.toString();
     const bodyAttributes = helmet.bodyAttributes.toString();
-    let head = "";
-    let script = "";
+    let head = initialHead;
 
     head += helmet.title.toString();
     head += helmet.priority.toString();
     head += helmet.base.toString();
     head += helmet.meta.toString();
     head += helmet.link.toString();
-    head += helmet.style.toString();
-    head += helmet.script.toString();
 
-    if (this.route.cssUrls) {
-      for (const cssUrl of this.route.cssUrls) {
-        head += `<link rel="stylesheet" href="${cssUrl}">`;
+    if (route.cssUrls) {
+      for (const href of route.cssUrls) {
+        head += `<link rel="stylesheet" href="${href}">`;
       }
     }
 
-    if (this.route.scriptUrl) {
-      const data: PageData = { props: this.props };
-      const content = JSON.stringify(data).replace(
-        /\<(!--|script|\/script)/gi,
-        "<\\$1"
-      );
+    head += helmet.style.toString();
+    head += helmet.script.toString();
 
-      script += `<script>window.${GLOBAL_PAGE_DATA}=${content}</script>`;
-      script += `<script type="module" src="${this.route.scriptUrl}"></script>`;
-    }
+    return this.context.renderHead({ htmlAttributes, bodyAttributes, head });
+  }
 
-    return { htmlAttributes, bodyAttributes, head, script };
+  renderSuffix(): string {
+    const { cache } = this.context;
+
+    // Only append cache to page when it's populated. Saves bytes when the
+    // feature is completely unused. The default cache is empty anyway.
+    const script = cache.size
+      ? `<script>window.${GLOBAL_PAGE_CACHE}=${stringifyForScript(
+          Array.from(this.context.cache.entries())
+        )}</script>`
+      : "";
+
+    return this.context.renderTail({ script });
+  }
+
+  renderOptions(
+    pageData: PageData
+  ): ReactDOM.RenderToReadableStreamOptions &
+    ReactDOM.RenderToPipeableStreamOptions {
+    const { scriptUrl } = this.context.route;
+    if (!scriptUrl) return {};
+
+    const content = JSON.stringify(pageData);
+    return {
+      bootstrapModules: [scriptUrl],
+      bootstrapScriptContent: `window.${GLOBAL_PAGE_DATA}=${content}`,
+    };
   }
 
   rawReadableStream(
     options: RawReadableStreamOptions = {}
   ): Promise<RawReadableStream> {
-    const { signal, onError = logger } = options;
-    return ReactDOM.renderToReadableStream(this.app, {
+    const { signal, onError = logger, head = "" } = options;
+    const { app, renderOptions } = this.getApp();
+    return ReactDOM.renderToReadableStream(app, {
       signal,
       onError,
+      ...renderOptions,
     }).then((stream) => {
-      const [prefix, suffix] = this.template(this.getDocumentOptions());
       const encoder = new TextEncoder();
 
       return {
-        prefix: encoder.encode(prefix),
-        suffix: encoder.encode(suffix),
+        prefix: () => encoder.encode(this.renderPrefix(head)),
+        suffix: () => encoder.encode(this.renderSuffix()),
         stream,
       };
     });
@@ -431,16 +665,16 @@ class ReactBody<P, C> implements Body {
       return writer.write(text).then(() => writer.releaseLock());
     };
 
-    write(prefix)
+    write(prefix())
       .then(() => stream.pipeTo(writable, { preventClose: true }))
-      .then(() => write(suffix).then(() => writable.close()))
+      .then(() => write(suffix()).then(() => writable.close()))
       .catch(options.onError);
 
     return readable;
   }
 
   rawNodeStream(options: RawNodeStreamOptions = {}): Promise<RawNodeStream> {
-    const { signal, onError = logger, onReady } = options;
+    const { signal, onError = logger, onReady, head = "" } = options;
 
     return new Promise((resolve, reject) => {
       const onAllReady = () => {
@@ -449,7 +683,8 @@ class ReactBody<P, C> implements Body {
       };
 
       const onShellReady = () => {
-        const [prefix, suffix] = this.template(this.getDocumentOptions());
+        const prefix = () => this.renderPrefix(head);
+        const suffix = () => this.renderSuffix();
         return resolve({ prefix, suffix, stream });
       };
 
@@ -458,11 +693,13 @@ class ReactBody<P, C> implements Body {
         return reject(err);
       };
 
-      const stream = ReactDOM.renderToPipeableStream(this.app, {
+      const { app, renderOptions } = this.getApp();
+      const stream = ReactDOM.renderToPipeableStream(app, {
         onAllReady,
         onError,
         onShellReady,
         onShellError,
+        ...renderOptions,
       });
 
       const onAbort = () => stream.abort();
@@ -474,11 +711,18 @@ class ReactBody<P, C> implements Body {
     const { prefix, suffix, stream } = await this.rawNodeStream(options);
     const proxy = new PassThrough({
       flush(cb) {
-        return cb(null, suffix);
+        return cb(null, suffix());
       },
     });
-    proxy.write(prefix);
+    proxy.write(prefix());
     stream.pipe(proxy);
     return proxy;
   }
+}
+
+/**
+ * Format data for rendering into a script tag.
+ */
+function stringifyForScript(data: unknown): string {
+  return JSON.stringify(data).replace(/\<(!--|script|\/script)/gi, "<\\$1");
 }
