@@ -1,4 +1,4 @@
-import { ServerSideContext, ServerSideProps } from "./index.js";
+import { ServerSideContext, ServerSideProps } from "./server.js";
 
 export interface ErrorProps {
   status: number;

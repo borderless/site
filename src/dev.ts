@@ -21,7 +21,7 @@ import type {
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import { fromNodeRequest } from "./node.js";
-import { Request } from "./index.js";
+import { Request } from "./server.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "es2016";

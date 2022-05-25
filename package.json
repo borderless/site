@@ -70,8 +70,6 @@
     "iterative": "^1.9.2",
     "raw-body": "^2.5.1",
     "react-helmet-async": "^1.3.0",
-    "swr": "^1.3.0",
-    "ts-scripts": "^0.0.0-development",
     "vite": "^2.9.7"
   },
   "devDependencies": {

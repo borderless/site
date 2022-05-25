@@ -1,5 +1,5 @@
 import { IncomingHttpHeaders, IncomingMessage } from "node:http";
-import { FormParams, Request, RequestType } from "./index.js";
+import { FormParams, Request, RequestType } from "./server.js";
 import getRawBody from "raw-body";
 import { URLSearchParams } from "node:url";
 
