@@ -1,10 +1,10 @@
 {
   "extends": "@borderless/ts-scripts/configs/tsconfig.json",
   "compilerOptions": {
-    "module": "ES2020",
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node", "jest", "vite/client"],
+    "moduleResolution": "Node",
+    "types": ["node", "vite/client"],
     "jsx": "react"
   },
   "include": ["./src/**/*"]
