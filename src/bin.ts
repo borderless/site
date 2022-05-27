@@ -31,7 +31,7 @@ Options:
 
 async function $list(argv: string[], options: Options) {
   const { "--help": help = false } = arg({ "--help": Boolean }, { argv });
-  const { pages, document, app, error, notFound } = await list(options);
+  const { pages, document, app, notFound } = await list(options);
 
   if (help) {
     return console.log(`
@@ -41,7 +41,6 @@ Lists the files used to build the project. The pages are all in root and follow 
 
   console.log(`App: ${JSON.stringify(app)}`);
   console.log(`Document: ${JSON.stringify(document)}`);
-  console.log(`Error: ${JSON.stringify(error)}`);
   console.log(`404: ${JSON.stringify(notFound)}`);
   console.log(`Pages (${Object.keys(pages).length} total):`);
 

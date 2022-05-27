@@ -25,7 +25,6 @@
     ".": "./dist/index.js",
     "./app": "./dist/app.js",
     "./client": "./dist/client.js",
-    "./common": "./dist/common.js",
     "./dev": "./dist/dev.js",
     "./document": "./dist/document.js",
     "./head": "./dist/head.js",
@@ -70,7 +69,8 @@
     "iterative": "^1.9.2",
     "raw-body": "^2.5.1",
     "react-helmet-async": "^1.3.0",
-    "vite": "^2.9.7"
+    "vite": "^2.9.7",
+    "youch": "^3.2.0"
   },
   "devDependencies": {
     "@borderless/ts-scripts": "^0.12.0",

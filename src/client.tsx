@@ -3,7 +3,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { HelmetProvider } from "react-helmet-async";
-import { PAGE_ELEMENT_ID, GLOBAL_PAGE_DATA } from "./common.js";
 import { PageData, PageDataContext, DataLoaderContext } from "./shared.js";
 import type { AppProps } from "./app.js";
 
@@ -14,7 +13,7 @@ export function render(
   App: React.ComponentType<AppProps>,
   Component: React.ComponentType<{}>
 ) {
-  const pageData = (window as any)[GLOBAL_PAGE_DATA] as PageData;
+  const pageData = (window as any).__DATA__ as PageData;
   const app = (
     <HelmetProvider>
       <PageDataContext.Provider value={pageData}>
@@ -26,7 +25,7 @@ export function render(
       </PageDataContext.Provider>
     </HelmetProvider>
   );
-  const pageEl = document.getElementById(PAGE_ELEMENT_ID)!;
+  const pageEl = document.getElementById("1")!;
   return ReactDOM.hydrateRoot(pageEl, app);
 }
 

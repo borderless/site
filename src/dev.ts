@@ -1,3 +1,4 @@
+import Youch from "youch";
 import { watch } from "chokidar";
 import { resolve, relative } from "node:path";
 import { IncomingMessage, ServerResponse, RequestListener } from "node:http";
@@ -12,6 +13,7 @@ import {
 } from "vite";
 import react from "@vitejs/plugin-react";
 import type {
+  Request,
   Server,
   AppModule,
   DocumentModule,
@@ -21,10 +23,9 @@ import type {
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import { fromNodeRequest } from "./node.js";
-import { Request } from "./server.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
-const DEFAULT_CLIENT_TARGET = "es2016";
+const DEFAULT_CLIENT_TARGET = "modules";
 const DEFAULT_SERVER_TARGET = "es2019";
 
 /**
@@ -45,6 +46,10 @@ const SITE_CLIENT_IMPORT_NAME = "@borderless/site/client";
 const DEFAULT_VITE_CONFIG = {
   configFile: false as const,
   envFile: false as const,
+  json: {
+    namedExports: false,
+    stringify: true,
+  },
 };
 
 /**
@@ -128,9 +133,17 @@ function buildServerScript(
     const { viteMetadata, fileName } = getVitePageOutput(path);
     const url = base + fileName;
     const css = Array.from(viteMetadata.importedCss).map((x) => base + x);
-    return `{ module: ${stringifyImport(path)}, serverModule: ${
-      serverPath ? stringifyImport(serverPath) : "undefined"
-    }, url: ${JSON.stringify(url)}, css: ${JSON.stringify(css)} }`;
+
+    return [
+      `{`,
+      `  module: ${stringifyImport(path)},`,
+      serverPath
+        ? `  serverModule: ${stringifyImport(serverPath)},`
+        : undefined,
+      `  scripts: [${JSON.stringify(url)}]`,
+      `  css: ${JSON.stringify(css)},`,
+      `}`,
+    ].join("\n");
   };
 
   const stringifyPages = (pages: Record<string, ListPage>) => {
@@ -148,7 +161,6 @@ function buildServerScript(
     ``,
     `export const server = createServer({`,
     `  pages: ${stringifyPages(files.pages)},`,
-    `  error: ${stringifyServerPage(files.error)},`,
     `  notFound: ${stringifyServerPage(files.notFound)},`,
     `  app: ${stringifyModule(files.app)},`,
     `  document: ${stringifyModule(files.document)},`,
@@ -213,7 +225,6 @@ export interface ListPage {
 
 export interface List {
   pages: Record<string, ListPage>;
-  error?: ListPage;
   notFound?: ListPage;
   app?: string;
   document?: string;
@@ -249,8 +260,6 @@ function filesToList(cwd: string, files: Iterable<string>) {
     if (file.startsWith("pages/")) {
       const route = file.slice(6, file.lastIndexOf("/"));
       list.pages[route] = addPage(list.pages[route], path);
-    } else if (file.startsWith("_error.")) {
-      list.error = addPage(list.error, path);
     } else if (file.startsWith("_404.")) {
       list.notFound = addPage(list.notFound, path);
     } else if (file.startsWith("_document.")) {
@@ -308,7 +317,6 @@ export async function build(options: BuildOptions): Promise<undefined> {
   const pagePaths = Object.values(files.pages);
   const publicAssets: string[] = [];
 
-  if (files.error) pagePaths.push(files.error);
   if (files.notFound) pagePaths.push(files.notFound);
 
   const clientResult = (await buildVite({
@@ -433,7 +441,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     publicDir: resolve(options.root, options.publicDir ?? DEFAULT_PUBLIC_DIR),
     plugins: [sitePagePlugin("development", () => cache?.list.app), react()],
     build: {
-      target: options.target,
+      target: options.target ?? DEFAULT_CLIENT_TARGET,
       sourcemap: true,
     },
     server: { middlewareMode: "ssr" },
@@ -463,13 +471,14 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   };
 
   // Must use the same loader for all dependencies to ensure shared modules.
-  const siteServer = await vite.ssrLoadModule(SITE_SERVER_IMPORT_NAME);
+  const siteServer = (await vite.ssrLoadModule(
+    SITE_SERVER_IMPORT_NAME
+  )) as typeof import("./server.js");
 
   const reloadCache = () => {
     const list = filesToList(cwd, files);
     const site = siteServer.createServer({
       pages: loadPages(list.pages),
-      error: list.error ? loadServerPage(list.error) : undefined,
       notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
       app: list.app ? loadServerModule<AppModule>(list.app) : undefined,
       document: list.document
@@ -514,13 +523,26 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   };
 
   return (req: IncomingMessage, res: ServerResponse) => {
+    // Render prettier errors.
+    const renderError = (err: Error) => {
+      vite.ssrFixStacktrace(err);
+
+      const youch = new Youch(err, req);
+      youch.toHTML().then(
+        (html) => {
+          res.writeHead(500, { "content-type": "text/html" });
+          res.end(html);
+        },
+        (err) => {
+          res.writeHead(500, { "content-type": "text/plain" });
+          res.end(String(err));
+        }
+      );
+    };
+
     // Create a next function that acts as our dynamic server-side renderer.
     const next = (err: Error | undefined) => {
-      if (err) {
-        res.statusCode = 500;
-        res.end(vite.ssrRewriteStacktrace(err.stack ?? ""));
-        return;
-      }
+      if (err) return renderError(err);
 
       server(fromNodeRequest(req))
         .then((response) => {
@@ -534,10 +556,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
             res.end(response.data);
           }
         })
-        .catch((err) => {
-          res.statusCode = 500;
-          res.end(`Error: ${vite.ssrRewriteStacktrace(err.stack)}`);
-        });
+        .catch(renderError);
     };
 
     return vite.middlewares(req, res, next);

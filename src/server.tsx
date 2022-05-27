@@ -6,7 +6,6 @@ import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
 import { FilledContext, HelmetProvider } from "react-helmet-async";
 import { PassThrough } from "stream";
-import { GLOBAL_PAGE_DATA } from "./common.js";
 import {
   PageData,
   PageDataContext,
@@ -96,8 +95,6 @@ export interface ServerSideContext<C> {
   request: Request;
   params: Params;
   context: C;
-  error?: unknown;
-  formData?: unknown;
 }
 
 export interface ServerSideErrorContext<C> extends ServerSideContext<C> {
@@ -127,20 +124,12 @@ export interface NodeStream {
   pipe<Writable extends NodeJS.WritableStream>(destination: Writable): Writable;
 }
 
-export interface NodeStreamOptions {
+export interface StreamOptions {
   head?: string;
+  tail?: string;
   onError?: (error: unknown) => void;
   signal?: AbortSignal;
-}
-
-export interface ReadableStreamOptions {
-  head?: string;
-  onError?: (error: unknown) => void;
-  signal?: AbortSignal;
-}
-
-export interface RawNodeStreamOptions extends NodeStreamOptions {
-  onReady?: () => void;
+  waitForAllReady?: boolean;
 }
 
 export interface RawNodeStream {
@@ -148,8 +137,6 @@ export interface RawNodeStream {
   suffix: () => string;
   stream: ReactDOM.PipeableStream;
 }
-
-export interface RawReadableStreamOptions extends ReadableStreamOptions {}
 
 export interface RawReadableStream {
   prefix: () => Uint8Array;
@@ -161,12 +148,10 @@ export interface RawReadableStream {
  * Supported body interfaces.
  */
 export interface Body {
-  rawNodeStream(options?: RawNodeStreamOptions): Promise<RawNodeStream>;
-  nodeStream(options?: NodeStreamOptions): Promise<NodeStream>;
-  rawReadableStream(
-    options?: RawReadableStreamOptions
-  ): Promise<RawReadableStream>;
-  readableStream(options?: ReadableStreamOptions): Promise<ReadableStream>;
+  rawNodeStream(options?: StreamOptions): Promise<RawNodeStream>;
+  nodeStream(options?: StreamOptions): Promise<NodeStream>;
+  rawReadableStream(options?: StreamOptions): Promise<RawReadableStream>;
+  readableStream(options?: StreamOptions): Promise<ReadableStream>;
 }
 
 /**
@@ -234,7 +219,7 @@ export interface ServerFile<T> {
 export interface ServerPage<C> {
   module: ServerLoader<PageModule>;
   serverModule?: ServerLoader<PageServerModule<C>>;
-  url?: string;
+  scripts?: string[];
   css?: string[];
 }
 
@@ -243,7 +228,6 @@ export interface ServerPage<C> {
  */
 export interface ServerOptions<C> {
   pages: Record<string, ServerPage<C>>;
-  error?: ServerPage<C>;
   notFound?: ServerPage<C>;
   app?: ServerFile<AppModule>;
   document?: ServerFile<DocumentModule>;
@@ -260,41 +244,22 @@ export type Server<C> = (request: Request, context: C) => Promise<Response>;
 export function createServer<C>(options: ServerOptions<C>): Server<C> {
   const router = createPageRouter(options.pages);
 
-  // The error page is the fallback component used when something breaks.
-  const errorRoute: Route<C> = options.error
-    ? {
-        key: "_error",
-        module: fn(options.error.module),
-        serverModule: fn(options.error.serverModule ?? {}),
-        scriptUrl: options.error.url,
-        cssUrls: options.error.css,
-        params: new Map(),
-      }
-    : {
-        key: "_error",
-        module: fn<object>(import("./error.js")),
-        serverModule: fn(import("./error.server.js")),
-        scriptUrl: undefined,
-        cssUrls: undefined,
-        params: new Map(),
-      };
-
   // The not found page is a fallback component used to render.
   const notFoundRoute: Route<C> = options.notFound
     ? {
         key: "_404",
         module: fn(options.notFound.module),
         serverModule: fn(options.notFound.serverModule ?? {}),
-        scriptUrl: options.notFound.url,
-        cssUrls: options.notFound.css,
+        scripts: options.notFound.scripts ?? [],
+        css: options.notFound.css ?? [],
         params: new Map(),
       }
     : {
         key: "_404",
         module: fn(import("./404.js")),
         serverModule: fn({}),
-        scriptUrl: undefined,
-        cssUrls: undefined,
+        scripts: [],
+        css: [],
         params: new Map(),
       };
 
@@ -312,7 +277,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       }
     : { module: fn(import("./document.js")) };
 
-  return async function server(request, context) {
+  return async function handler(request, context) {
     const pathname = request.pathname.slice(1);
     const route = router(pathname) ?? notFoundRoute;
 
@@ -332,6 +297,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       `The "_document" module is missing the "renderTail" export`
     );
 
+    const helmetContext = {};
     const { key, params } = route;
     const serverSideContext: ServerSideContext<C> = {
       key,
@@ -341,88 +307,44 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     };
     const loader = getLoader(server, serverSideContext);
 
-    try {
-      const helmetContext = {};
-      const Component = must(
-        page.default,
-        `The page for "${route.key}" module is missing a default export`
-      );
+    const Component = must(
+      page.default,
+      `The page for "${route.key}" module is missing a default export`
+    );
 
-      if (route === notFoundRoute) {
-        if (request.method === "GET") {
-          const serverSideProps = await getServerSideProps(
-            server,
-            serverSideContext
-          );
-
-          return render(<Component />, 404, {
-            route,
-            helmetContext,
-            serverSideProps,
-            loader,
-            renderHead,
-            renderTail,
-            formData: undefined,
-          });
-        }
-
-        return {
-          status: 404,
-          headers: new Map(),
-          body: undefined,
-        };
-      }
-
-      const App = must(
-        app.default,
-        `The "_app" module is missing a default export`
-      );
-
-      if (request.method === "POST" && typeof server.form === "function") {
-        if (request.type === RequestType.FORM) {
-          const formData = await server.form(serverSideContext);
-          const serverSideProps = await getServerSideProps(
-            server,
-            serverSideContext
-          );
-
-          return render(
-            <App>
-              <Component />
-            </App>,
-            200,
-            {
-              route,
-              helmetContext,
-              serverSideProps,
-              loader,
-              formData,
-              renderHead,
-              renderTail,
-            }
-          );
-        }
-
-        return {
-          status: 415,
-          headers: new Map(),
-          body: undefined,
-        };
-      }
-
+    if (route === notFoundRoute) {
       if (request.method === "GET") {
-        // Handle loader requests as JSON responses.
-        if (request.search.get("__site__") === "1") {
-          const args = request.search.getAll("data").map((x) => JSON.parse(x));
-          const data = await loader(...args);
+        const serverSideProps = await getServerSideProps(
+          server,
+          serverSideContext
+        );
 
-          return {
-            status: 200,
-            headers: new Map([["content-type", "application/json"]]),
-            body: JSON.stringify(data),
-          };
-        }
+        return render(<Component />, 404, {
+          route,
+          helmetContext,
+          serverSideProps,
+          loader,
+          renderHead,
+          renderTail,
+          formData: undefined,
+        });
+      }
 
+      return {
+        status: 404,
+        headers: new Map(),
+        body: undefined,
+      };
+    }
+
+    const App = must(
+      app.default,
+      `The "_app" module is missing a default export`
+    );
+
+    if (request.method === "POST" && typeof server.form === "function") {
+      if (request.type === RequestType.FORM) {
+        const formData = await server.form(serverSideContext);
         const serverSideProps = await getServerSideProps(
           server,
           serverSideContext
@@ -438,44 +360,60 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
             helmetContext,
             serverSideProps,
             loader,
+            formData,
             renderHead,
             renderTail,
-            formData: undefined,
           }
         );
       }
 
       return {
-        status: 405,
-        headers: new Map([["allow", generateAllowHeader(server)]]),
+        status: 415,
+        headers: new Map(),
         body: undefined,
       };
-    } catch (error) {
-      const [page, server] = await Promise.all([
-        errorRoute.module(),
-        errorRoute.serverModule(),
-      ] as const);
+    }
 
-      const Component = must(
-        page.default,
-        `The page for "${route.key}" module is missing a default export`
-      );
+    if (request.method === "GET") {
+      // Handle loader requests as JSON responses.
+      if (request.search.get("__site__") === "1") {
+        const args = request.search.getAll("data").map((x) => JSON.parse(x));
+        const data = await loader(...args);
+
+        return {
+          status: 200,
+          headers: new Map([["content-type", "application/json"]]),
+          body: JSON.stringify(data),
+        };
+      }
 
       const serverSideProps = await getServerSideProps(
         server,
-        Object.assign(serverSideContext, { error })
+        serverSideContext
       );
 
-      return render(<Component />, 500, {
-        route,
-        helmetContext: {},
-        serverSideProps,
-        loader,
-        renderHead,
-        renderTail,
-        formData: undefined,
-      });
+      return render(
+        <App>
+          <Component />
+        </App>,
+        200,
+        {
+          route,
+          helmetContext,
+          serverSideProps,
+          loader,
+          renderHead,
+          renderTail,
+          formData: undefined,
+        }
+      );
     }
+
+    return {
+      status: 405,
+      headers: new Map([["allow", generateAllowHeader(server)]]),
+      body: undefined,
+    };
   };
 }
 
@@ -524,8 +462,8 @@ type Route<C> = {
   key: string;
   module: Loader<PageModule>;
   serverModule: Loader<PageServerModule<C>>;
-  scriptUrl: string | undefined;
-  cssUrls: string[] | undefined;
+  scripts: string[];
+  css: string[];
   params: ReadonlyMap<string, string>;
 };
 
@@ -543,8 +481,8 @@ function createPageRouter<C>(
           {
             module: fn(contents.module),
             serverModule: fn(contents.serverModule ?? {}),
-            scriptUrl: contents.url,
-            cssUrls: contents.css,
+            scripts: contents.scripts ?? [],
+            css: contents.css ?? [],
           },
         ];
       }
@@ -555,9 +493,9 @@ function createPageRouter<C>(
 
   return (pathname) => {
     for (const { route, keys, values } of router(pathname)) {
-      const { module, serverModule, scriptUrl, cssUrls } = routes.get(route)!;
+      const { module, serverModule, scripts, css } = routes.get(route)!;
       const params = new Map(zip(keys, map(values, decode)));
-      return { key: route, module, serverModule, scriptUrl, params, cssUrls };
+      return { key: route, module, serverModule, params, scripts, css };
     }
   };
 }
@@ -628,20 +566,12 @@ function must<T>(value: T | null | undefined, message: string): T {
 }
 
 /**
- * Default fallback for error handling.
- */
-const logger =
-  process.env.NODE_ENV === "production"
-    ? undefined
-    : (err: unknown) => console.error(err);
-
-/**
  * React body renderer that supports multiple ways of returning the application.
  */
 class ReactBody<C> implements Body {
   constructor(private page: JSX.Element, private context: RenderContext<C>) {}
 
-  getApp() {
+  private getApp() {
     const pageData: PageData = {
       props: this.context.serverSideProps?.props ?? {},
       formData: this.context.formData,
@@ -657,20 +587,18 @@ class ReactBody<C> implements Body {
       </HelmetProvider>
     );
 
-    const { scriptUrl } = this.context.route;
-    const renderOptions = scriptUrl
+    const { scripts } = this.context.route;
+    const renderOptions = scripts.length
       ? {
-          bootstrapModules: [scriptUrl],
-          bootstrapScriptContent: `window.${GLOBAL_PAGE_DATA}=${stringifyForScript(
-            pageData
-          )}`,
+          bootstrapModules: scripts,
+          bootstrapScriptContent: `window.__DATA__=${JSON.stringify(pageData)}`,
         }
       : undefined;
 
     return { app, renderOptions };
   }
 
-  renderPrefix(initialHead: string): string {
+  private renderPrefix(initialHead: string): string {
     const { helmetContext, route } = this.context;
     const { helmet } = helmetContext as FilledContext;
 
@@ -684,10 +612,8 @@ class ReactBody<C> implements Body {
     head += helmet.meta.toString();
     head += helmet.link.toString();
 
-    if (route.cssUrls) {
-      for (const href of route.cssUrls) {
-        head += `<link rel="stylesheet" href="${href}">`;
-      }
+    for (const href of route.css) {
+      head += `<link rel="stylesheet" href="${href}">`;
     }
 
     head += helmet.style.toString();
@@ -696,33 +622,34 @@ class ReactBody<C> implements Body {
     return this.context.renderHead({ htmlAttributes, bodyAttributes, head });
   }
 
-  renderSuffix(): string {
-    return this.context.renderTail({ script: "" });
+  private renderSuffix(initialTail: string): string {
+    const tail = initialTail;
+    return this.context.renderTail({ tail });
   }
 
-  rawReadableStream(
-    options: RawReadableStreamOptions = {}
+  async rawReadableStream(
+    options: StreamOptions = {}
   ): Promise<RawReadableStream> {
-    const { signal, onError = logger, head = "" } = options;
+    const { signal, onError, waitForAllReady, head = "", tail = "" } = options;
     const { app, renderOptions } = this.getApp();
-    return ReactDOM.renderToReadableStream(app, {
+    const encoder = new TextEncoder();
+
+    const stream = await ReactDOM.renderToReadableStream(app, {
       signal,
       onError,
       ...renderOptions,
-    }).then((stream) => {
-      const encoder = new TextEncoder();
-
-      return {
-        prefix: () => encoder.encode(this.renderPrefix(head)),
-        suffix: () => encoder.encode(this.renderSuffix()),
-        stream,
-      };
     });
+
+    if (waitForAllReady) await stream.allReady;
+
+    return {
+      prefix: () => encoder.encode(this.renderPrefix(head)),
+      suffix: () => encoder.encode(this.renderSuffix(tail)),
+      stream,
+    };
   }
 
-  async readableStream(
-    options: ReadableStreamOptions = {}
-  ): Promise<ReadableStream> {
+  async readableStream(options: StreamOptions = {}): Promise<ReadableStream> {
     const { prefix, suffix, stream } = await this.rawReadableStream(options);
     const { readable, writable } = new TransformStream();
 
@@ -739,20 +666,23 @@ class ReactBody<C> implements Body {
     return readable;
   }
 
-  rawNodeStream(options: RawNodeStreamOptions = {}): Promise<RawNodeStream> {
-    const { signal, onError = logger, onReady, head = "" } = options;
+  rawNodeStream(options: StreamOptions = {}): Promise<RawNodeStream> {
+    const { signal, onError, waitForAllReady, head = "", tail = "" } = options;
 
     return new Promise((resolve, reject) => {
+      const prefix = () => this.renderPrefix(head);
+      const suffix = () => this.renderSuffix(tail);
+
       const onAllReady = () => {
         signal?.removeEventListener("abort", onAbort);
-        return onReady?.();
+        if (waitForAllReady) {
+          return resolve({ prefix, suffix, stream });
+        }
       };
 
-      const onShellReady = () => {
-        const prefix = () => this.renderPrefix(head);
-        const suffix = () => this.renderSuffix();
-        return resolve({ prefix, suffix, stream });
-      };
+      const onShellReady = waitForAllReady
+        ? undefined
+        : () => resolve({ prefix, suffix, stream });
 
       const onShellError = (err: unknown) => {
         signal?.removeEventListener("abort", onAbort);
@@ -773,7 +703,7 @@ class ReactBody<C> implements Body {
     });
   }
 
-  async nodeStream(options: NodeStreamOptions = {}): Promise<NodeStream> {
+  async nodeStream(options: StreamOptions = {}): Promise<NodeStream> {
     const { prefix, suffix, stream } = await this.rawNodeStream(options);
     const proxy = new PassThrough({
       flush(cb) {
@@ -784,11 +714,4 @@ class ReactBody<C> implements Body {
     stream.pipe(proxy);
     return proxy;
   }
-}
-
-/**
- * Format data for rendering into a script tag.
- */
-function stringifyForScript(data: unknown): string {
-  return JSON.stringify(data).replace(/\<(!--|script|\/script)/gi, "<\\$1");
 }

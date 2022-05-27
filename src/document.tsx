@@ -1,5 +1,3 @@
-import { PAGE_ELEMENT_ID } from "./common.js";
-
 export interface HeadOptions {
   htmlAttributes: string;
   bodyAttributes: string;
@@ -8,14 +6,14 @@ export interface HeadOptions {
 
 export function renderHead(options: HeadOptions): string {
   const { htmlAttributes, bodyAttributes, head } = options;
-  return `<!doctype html><html${htmlAttributes}><head>${head}</head><body${bodyAttributes}><div id=${PAGE_ELEMENT_ID}>`;
+  return `<!doctype html><html${htmlAttributes}><head>${head}</head><body${bodyAttributes}><div id=1>`;
 }
 
 export interface TailOptions {
-  script: string;
+  tail: string;
 }
 
 export function renderTail(options: TailOptions): string {
-  const { script } = options;
-  return `</div>${script}</body></html>`;
+  const { tail } = options;
+  return `</div>${tail}</body></html>`;
 }

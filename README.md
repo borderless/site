@@ -58,7 +58,7 @@ Options:
 
 ### List
 
-Lists the files used to build the project. The pages are all in root and follow the patterns of `_app`, `_404`, `_document`, `_error`, or `pages/**/index`. Acceptable extensions are `.ts`, `.tsx`, `.js`, and `.jsx`.
+Lists the files used to build the project. The pages are all in root and follow the patterns of `_app`, `_404`, `_document`, or `pages/**/index`. Acceptable extensions are `.ts`, `.tsx`, `.js`, and `.jsx`.
 
 ## Development
 
