@@ -16,6 +16,8 @@ import {
 import type { AppProps } from "./app.js";
 import type { HeadOptions, TailOptions } from "./document.js";
 
+const FORM_CONTENT_TYPE_RE = /^application\/x-www-form-urlencoded(?:;|$)/i;
+
 /**
  * Headers sent to the server for the request.
  */
@@ -44,43 +46,15 @@ export interface FormParams {
 }
 
 /**
- * Supported request types.
+ * Standardized request format for server implementations.
  */
-export enum RequestType {
-  UNKNOWN,
-  FORM,
-}
-
-/**
- * Standard base request.
- */
-export interface BaseRequest {
+export interface Request {
   method: string;
-  type: RequestType;
   pathname: string;
   search: SearchParams;
   headers: Headers;
-}
-
-/**
- * HTTP request for simply rendering the content (GET).
- */
-export interface DefaultRequest extends BaseRequest {
-  type: RequestType.UNKNOWN;
-}
-
-/**
- * HTTP request for form processing (POST and `application/x-www-form-urlencoded`).
- */
-export interface FormRequest extends BaseRequest {
-  type: RequestType.FORM;
   form: () => Promise<FormParams>;
 }
-
-/**
- * Simple `Request` interface for rendering a page.
- */
-export type Request = DefaultRequest | FormRequest;
 
 /**
  * Parameters provided from matching path segments, e.g. `/[param]`.
@@ -278,6 +252,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     : { module: fn(import("./document.js")) };
 
   return async function handler(request, context) {
+    const method = request.method.toUpperCase();
     const pathname = request.pathname.slice(1);
     const route = router(pathname) ?? notFoundRoute;
 
@@ -313,7 +288,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     );
 
     if (route === notFoundRoute) {
-      if (request.method === "GET") {
+      if (method === "GET") {
         const serverSideProps = await getServerSideProps(
           server,
           serverSideContext
@@ -342,8 +317,10 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       `The "_app" module is missing a default export`
     );
 
-    if (request.method === "POST" && typeof server.form === "function") {
-      if (request.type === RequestType.FORM) {
+    if (method === "POST" && typeof server.form === "function") {
+      if (
+        FORM_CONTENT_TYPE_RE.test(request.headers.get("content-type") ?? "")
+      ) {
         const formData = await server.form(serverSideContext);
         const serverSideProps = await getServerSideProps(
           server,
@@ -374,7 +351,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       };
     }
 
-    if (request.method === "GET") {
+    if (method === "GET") {
       // Handle loader requests as JSON responses.
       if (request.search.get("__site__") === "1") {
         const args = request.search.getAll("data").map((x) => JSON.parse(x));

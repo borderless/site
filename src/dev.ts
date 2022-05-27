@@ -13,16 +13,13 @@ import {
 } from "vite";
 import react from "@vitejs/plugin-react";
 import type {
-  Request,
-  Server,
   AppModule,
   DocumentModule,
   ServerPage,
   ServerFile,
-  NodeStream,
 } from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
-import { fromNodeRequest } from "./node.js";
+import { createHandler, Handler } from "./adapters/node.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "modules";
@@ -413,7 +410,7 @@ export interface DevOptions extends ListOptions {
 /**
  * Context for the dev server requests.
  */
-type DevServerContext = Record<string, never>;
+export type DevServerContext = unknown;
 
 /**
  * Create a local dev environment with HMR and React Refresh support.
@@ -422,7 +419,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
   const cwd = resolve(options.root, options.src);
   const files = new Set<string>();
   const watcher = getChokidar(cwd);
-  let cache: { site: Server<DevServerContext>; list: List } | null = null;
+  let cache: { handler: Handler; list: List } | null = null;
 
   watcher.on("add", (path) => {
     files.add(path);
@@ -477,50 +474,26 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
 
   const reloadCache = () => {
     const list = filesToList(cwd, files);
-    const site = siteServer.createServer({
-      pages: loadPages(list.pages),
-      notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
-      app: list.app ? loadServerModule<AppModule>(list.app) : undefined,
-      document: list.document
-        ? loadServerModule<DocumentModule>(list.document)
-        : undefined,
-    });
-    cache = { site, list };
+    const handler = createHandler(
+      siteServer.createServer({
+        pages: loadPages(list.pages),
+        notFound: list.notFound ? loadServerPage(list.notFound) : undefined,
+        app: list.app ? loadServerModule<AppModule>(list.app) : undefined,
+        document: list.document
+          ? loadServerModule<DocumentModule>(list.document)
+          : undefined,
+      }),
+      (): DevServerContext => ({}),
+      {
+        head: DEV_MODE_HEAD,
+      }
+    );
+    cache = { handler, list };
     return cache;
   };
 
   // Pre-load site before user accesses page.
   reloadCache();
-
-  // The server gets dynamic site instances and injects the Vite transform into HTML.
-  const server = async (
-    request: Request
-  ): Promise<{
-    status: number;
-    headers: ReadonlyMap<string, string>;
-    data: NodeStream | string | undefined;
-  }> => {
-    const { site } = cache ?? reloadCache();
-    const response = await site(request, {});
-
-    if (response.body === undefined || typeof response.body === "string") {
-      return {
-        status: response.status,
-        headers: response.headers,
-        data: response.body,
-      };
-    }
-
-    const stream = await response.body.nodeStream({
-      head: DEV_MODE_HEAD,
-    });
-
-    return {
-      status: response.status,
-      headers: response.headers,
-      data: stream,
-    };
-  };
 
   return (req: IncomingMessage, res: ServerResponse) => {
     // Render prettier errors.
@@ -544,19 +517,8 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     const next = (err: Error | undefined) => {
       if (err) return renderError(err);
 
-      server(fromNodeRequest(req))
-        .then((response) => {
-          res.statusCode = response.status;
-          for (const [key, value] of response.headers) {
-            res.setHeader(key, value);
-          }
-          if (typeof response.data === "object") {
-            response.data.pipe(res);
-          } else {
-            res.end(response.data);
-          }
-        })
-        .catch(renderError);
+      const { handler } = cache ?? reloadCache();
+      return handler(req, res, renderError);
     };
 
     return vite.middlewares(req, res, next);
