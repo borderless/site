@@ -1,12 +1,11 @@
 import type {
   IncomingHttpHeaders,
   IncomingMessage,
-  RequestListener,
   ServerResponse,
 } from "node:http";
-import { FormParams, Request, Server, StreamOptions } from "../server.js";
-import getRawBody from "raw-body";
 import { URLSearchParams } from "node:url";
+import getRawBody from "raw-body";
+import { Request, Server, StreamOptions } from "../render.js";
 
 /**
  * Node.js compatible version of the `Headers`.
@@ -37,16 +36,7 @@ class NodeParams {
  * Transform a node.js request into a supported site request.
  */
 export function fromNodeRequest(req: IncomingMessage): Request {
-  const method = req.method?.toUpperCase() ?? "GET";
-  const url = new URL(req.url ?? "", `http://localhost`);
-
-  return {
-    method,
-    pathname: url.pathname,
-    search: url.searchParams,
-    headers: new NodeParams(req.headers),
-    form: () => toFormParams(req),
-  };
+  return new NodeRequest(req);
 }
 
 export type Handler = (
@@ -82,9 +72,36 @@ export function createHandler<C>(
   };
 }
 
-/**
- * Transform a form into parameters.
- */
-function toFormParams(req: IncomingMessage): Promise<FormParams> {
-  return getRawBody(req).then((value) => new URLSearchParams(value.toString()));
+class NodeRequest implements Request {
+  method: string;
+  pathname: string;
+  search: URLSearchParams;
+
+  headers = new NodeParams(this.req.headers);
+
+  constructor(private req: IncomingMessage) {
+    const url = new URL(req.url ?? "", `http://localhost`);
+
+    this.method = req.method?.toUpperCase() ?? "GET";
+    this.pathname = url.pathname;
+    this.search = url.searchParams;
+  }
+
+  arrayBuffer() {
+    return getRawBody(this.req);
+  }
+
+  form() {
+    return getRawBody(this.req).then(
+      (value) => new URLSearchParams(value.toString())
+    );
+  }
+
+  text() {
+    return getRawBody(this.req).then((value) => value.toString());
+  }
+
+  json() {
+    return getRawBody(this.req).then((value) => JSON.parse(value.toString()));
+  }
 }

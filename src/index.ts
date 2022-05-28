@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { PageDataContext, DataLoaderContext, PageData } from "./shared.js";
+import { PageDataContext, PageData } from "./shared.js";
 
 /**
  * Access to the server-side props.
@@ -13,11 +13,4 @@ export function useServerSideProps<T extends object>(): T {
  */
 export function useFormData<T>(): T | undefined {
   return (useContext(PageDataContext) as PageData).formData as T | undefined;
-}
-
-/**
- * Access the data loader method, for use with something like `swr`.
- */
-export function useLoader() {
-  return useContext(DataLoaderContext);
 }

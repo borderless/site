@@ -8,18 +8,6 @@ export const typeError = (message: string) => () => {
 };
 
 /**
- * Data loader context value.
- */
-export type DataLoaderValue = (...args: unknown[]) => Promise<unknown>;
-
-/**
- * The loader for requesting data from the server.
- */
-export const DataLoaderContext = createContext<DataLoaderValue>(
-  typeError("Data loader not implemented")
-);
-
-/**
  * Data required for rendering a page.
  */
 export interface PageData {

@@ -17,7 +17,7 @@ import type {
   DocumentModule,
   ServerPage,
   ServerFile,
-} from "./server.js";
+} from "./render.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import { createHandler, Handler } from "./adapters/node.js";
 
@@ -34,7 +34,7 @@ const EXTENSIONS = ["js", "jsx", "ts", "tsx"];
  * Path to import default `App` for client-side rendering.
  */
 const SITE_COMPONENT_APP_IMPORT_NAME = "@borderless/site/app";
-const SITE_SERVER_IMPORT_NAME = "@borderless/site/server";
+const SITE_RENDER_IMPORT_NAME = "@borderless/site/render";
 const SITE_CLIENT_IMPORT_NAME = "@borderless/site/client";
 
 /**
@@ -79,22 +79,6 @@ function vitePageEntry(root: string, path: string) {
 }
 
 /**
- * Generate a simple page script for hydration.
- */
-function buildPageScript(
-  appPath: string,
-  pagePath: string,
-  mode: string
-): string {
-  return [
-    `import { render } from ${JSON.stringify(SITE_CLIENT_IMPORT_NAME)};`,
-    `import Component from ${JSON.stringify(pagePath)};`,
-    `import App from ${JSON.stringify(appPath)};`,
-    `render(App, Component, ${JSON.stringify(mode)});`,
-  ].join("\n");
-}
-
-/**
  * Generate the server-side script for rendering pages.
  */
 function buildServerScript(
@@ -134,10 +118,10 @@ function buildServerScript(
     return [
       `{`,
       `  module: ${stringifyImport(path)},`,
-      serverPath
-        ? `  serverModule: ${stringifyImport(serverPath)},`
-        : undefined,
-      `  scripts: [${JSON.stringify(url)}]`,
+      `  serverModule: ${
+        serverPath ? stringifyImport(serverPath) : "undefined"
+      },`,
+      `  scripts: [${JSON.stringify(url)}],`,
       `  css: ${JSON.stringify(css)},`,
       `}`,
     ].join("\n");
@@ -146,15 +130,15 @@ function buildServerScript(
   const stringifyPages = (pages: Record<string, ListPage>) => {
     const pagesString = Object.entries(pages)
       .map(([route, path]) => {
-        return `${JSON.stringify(route)}: ${stringifyServerPage(path)}`;
+        return `  ${JSON.stringify(route)}: ${stringifyServerPage(path)}`;
       })
-      .join(", ");
+      .join(",\n");
 
-    return `{ ${pagesString} }`;
+    return `{\n${pagesString}\n}`;
   };
 
   return [
-    `import { createServer } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
+    `import { createServer } from ${JSON.stringify(SITE_RENDER_IMPORT_NAME)};`,
     ``,
     `export const server = createServer({`,
     `  pages: ${stringifyPages(files.pages)},`,
@@ -167,7 +151,7 @@ function buildServerScript(
 
 function buildServerDts() {
   return [
-    `import { Server } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
+    `import { Server } from ${JSON.stringify(SITE_RENDER_IMPORT_NAME)};`,
     ``,
     `export declare const server: Server<unknown>;`,
   ].join("\n");
@@ -204,7 +188,14 @@ function sitePagePlugin(
       if (id.startsWith(`${SITE_PAGE_MODULE_PREFIX}/`)) {
         const appPath = getAppPath() ?? SITE_COMPONENT_APP_IMPORT_NAME;
         const pagePath = id.slice(SITE_PAGE_MODULE_PREFIX.length);
-        return buildPageScript(appPath, pagePath, mode);
+
+        return [
+          `import React from "react";`,
+          `import { hydrate } from ${JSON.stringify(SITE_CLIENT_IMPORT_NAME)};`,
+          `import Component from ${JSON.stringify(pagePath)};`,
+          `import App from ${JSON.stringify(appPath)};`,
+          `hydrate(React.createElement(App, { children: React.createElement(Component) }));`,
+        ].join("\n");
       }
     },
   };
@@ -231,7 +222,7 @@ function getChokidar(cwd: string, persistent = true) {
   return watch(
     [
       ...EXTENSIONS.map((x) => `pages/**/index?(.server).${x}`),
-      ...EXTENSIONS.map((x) => `_@(error|404)?(.server).${x}`),
+      ...EXTENSIONS.map((x) => `_404?(.server).${x}`),
       ...EXTENSIONS.map((x) => `_@(document|app).${x}`),
     ],
     { cwd, persistent }
@@ -366,6 +357,9 @@ export async function build(options: BuildOptions): Promise<undefined> {
         outDir: serverOutDir,
         ssr: true,
       },
+      optimizeDeps: {
+        include: [],
+      },
     })) as RollupOutput,
     // Copy all files from the public directory and track them for output into server bundle.
     copyDir(
@@ -444,20 +438,25 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     server: { middlewareMode: "ssr" },
   });
 
-  const loadServerModule = <T>(path: string): ServerFile<T> => {
-    return { module: load(vite, path) } as ServerFile<T>;
-  };
+  // Must use the same loader for all dependencies to ensure shared modules.
+  const siteServer = (await vite.ssrLoadModule(
+    SITE_RENDER_IMPORT_NAME
+  )) as typeof import("./render.js");
 
-  const loadServerPage = (page: ListPage): ServerPage<DevServerContext> => {
+  function loadServerModule<T>(path: string): ServerFile<T> {
+    return { module: load<T>(vite, path) };
+  }
+
+  function loadServerPage(page: ListPage): ServerPage<DevServerContext> {
     const { path = "", serverPath = "" } = page;
     return {
-      url: vitePageEntry(options.root, path),
+      scripts: [vitePageEntry(options.root, path)],
       module: load(vite, path),
       serverModule: serverPath ? load(vite, serverPath) : undefined,
-    } as ServerPage<DevServerContext>;
-  };
+    };
+  }
 
-  const loadPages = (pages: Record<string, ListPage>) => {
+  function loadPages(pages: Record<string, ListPage>) {
     return Object.fromEntries(
       Object.entries(pages).map<[string, ServerPage<DevServerContext>]>(
         ([route, path]) => {
@@ -465,14 +464,9 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
         }
       )
     );
-  };
+  }
 
-  // Must use the same loader for all dependencies to ensure shared modules.
-  const siteServer = (await vite.ssrLoadModule(
-    SITE_SERVER_IMPORT_NAME
-  )) as typeof import("./server.js");
-
-  const reloadCache = () => {
+  function reloadCache() {
     const list = filesToList(cwd, files);
     const handler = createHandler(
       siteServer.createServer({
@@ -490,7 +484,7 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
     );
     cache = { handler, list };
     return cache;
-  };
+  }
 
   // Pre-load site before user accesses page.
   reloadCache();
@@ -528,8 +522,8 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
 /**
  * Use `vite.ssrLoadModule` for hot reloading and import resolution.
  */
-function load(vite: ViteDevServer, path: string) {
-  return () => vite.ssrLoadModule(path) as Promise<unknown>;
+function load<T = unknown>(vite: ViteDevServer, path: string) {
+  return () => vite.ssrLoadModule(path) as Promise<T>;
 }
 
 /**

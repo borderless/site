@@ -6,31 +6,17 @@ import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
 import { FilledContext, HelmetProvider } from "react-helmet-async";
 import { PassThrough } from "stream";
-import {
-  PageData,
-  PageDataContext,
-  typeError,
-  DataLoaderValue,
-  DataLoaderContext,
-} from "./shared.js";
+import { PageData, PageDataContext } from "./shared.js";
 import type { AppProps } from "./app.js";
 import type { HeadOptions, TailOptions } from "./document.js";
 
+/** Match form submissions for `onSubmit` server handler. */
 const FORM_CONTENT_TYPE_RE = /^application\/x-www-form-urlencoded(?:;|$)/i;
 
 /**
  * Headers sent to the server for the request.
  */
 export interface Headers {
-  get(name: string): string | null;
-  getAll(name: string): string[];
-  has(name: string): boolean;
-}
-
-/**
- * Parameters sent using the query string to the server.
- */
-export interface SearchParams {
   get(name: string): string | null;
   getAll(name: string): string[];
   has(name: string): boolean;
@@ -51,9 +37,12 @@ export interface FormParams {
 export interface Request {
   method: string;
   pathname: string;
-  search: SearchParams;
+  search: URLSearchParams;
   headers: Headers;
   form: () => Promise<FormParams>;
+  text: () => Promise<string>;
+  json: () => Promise<unknown>;
+  arrayBuffer: () => Promise<ArrayBuffer>;
 }
 
 /**
@@ -71,15 +60,12 @@ export interface ServerSideContext<C> {
   context: C;
 }
 
-export interface ServerSideErrorContext<C> extends ServerSideContext<C> {
-  error: unknown;
-}
-
 /**
  * Valid return type of `getServerSideProps`.
  */
 export interface ServerSideProps<P> {
   props: P;
+  hydrate?: boolean;
   status?: number;
   redirect?: { url: string };
 }
@@ -98,6 +84,9 @@ export interface NodeStream {
   pipe<Writable extends NodeJS.WritableStream>(destination: Writable): Writable;
 }
 
+/**
+ * Stream rendering options.
+ */
 export interface StreamOptions {
   head?: string;
   tail?: string;
@@ -106,12 +95,18 @@ export interface StreamOptions {
   waitForAllReady?: boolean;
 }
 
+/**
+ * Raw node.js stream result.
+ */
 export interface RawNodeStream {
   prefix: () => string;
   suffix: () => string;
   stream: ReactDOM.PipeableStream;
 }
 
+/**
+ * Raw web stream result.
+ */
 export interface RawReadableStream {
   prefix: () => Uint8Array;
   suffix: () => Uint8Array;
@@ -138,41 +133,47 @@ export interface Response {
 }
 
 /**
- * The page component exports the component to be rendered as HTML.
+ * Handle form submission on the server-side.
  */
-export interface PageModule {
-  default?: React.ComponentType<{}>;
-}
+export type OnSubmitHandler<C> = (context: ServerSideContext<C>) => object;
 
-export type FormHandler<C> = (context: ServerSideContext<C>) => object;
-
-export type LoaderHandler<C> = (
+/**
+ * Handle all incoming requests to the current route.
+ */
+export type OnRequestHandler<C> = (
   context: ServerSideContext<C>,
-  ...args: unknown[]
-) => unknown | Promise<unknown>;
+  next: () => Promise<Response>
+) => Response | Promise<Response>;
 
 /**
  * The server module page allows creation of loader and form handling.
  */
 export interface PageServerModule<C> {
   getServerSideProps?: GetServerSideProps<{}, C>;
-  loader?: LoaderHandler<C>;
-  form?: FormHandler<C>;
+  onSubmit?: OnSubmitHandler<C>;
+  onRequest?: Record<string, OnRequestHandler<C>>;
+}
+
+/**
+ * The page component exports the component to be rendered as HTML.
+ */
+export interface PageModule {
+  default?: React.ComponentType<{}>;
 }
 
 /**
  * The application module exports a react component that wraps every page.
  */
 export interface AppModule {
-  default: React.ComponentType<AppProps>;
+  default?: React.ComponentType<AppProps>;
 }
 
 /**
  * The document module exports a function that returns the HTML header and footer.
  */
 export interface DocumentModule {
-  renderHead: (options: HeadOptions) => string;
-  renderTail: (options: TailOptions) => string;
+  renderHead?: (options: HeadOptions) => string;
+  renderTail?: (options: TailOptions) => string;
 }
 
 /**
@@ -191,7 +192,7 @@ export interface ServerFile<T> {
  * Server-side page component.
  */
 export interface ServerPage<C> {
-  module: ServerLoader<PageModule>;
+  module?: ServerLoader<PageModule>;
   serverModule?: ServerLoader<PageServerModule<C>>;
   scripts?: string[];
   css?: string[];
@@ -223,7 +224,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
     ? {
         key: "_404",
         module: fn(options.notFound.module),
-        serverModule: fn(options.notFound.serverModule ?? {}),
+        serverModule: fn(options.notFound.serverModule),
         scripts: options.notFound.scripts ?? [],
         css: options.notFound.css ?? [],
         params: new Map(),
@@ -251,28 +252,18 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       }
     : { module: fn(import("./document.js")) };
 
-  return async function handler(request, context) {
+  return async function handler(request, context): Promise<Response> {
     const method = request.method.toUpperCase();
     const pathname = request.pathname.slice(1);
     const route = router(pathname) ?? notFoundRoute;
 
-    const [page, server, app, document] = await Promise.all([
+    const [page, server = {}, app, document] = await Promise.all([
       route.module(),
       route.serverModule(),
       serverApp.module(),
       serverDocument.module(),
-    ] as const);
+    ]);
 
-    const renderHead = must(
-      document.renderHead,
-      `The "_document" module is missing the "renderHead" export`
-    );
-    const renderTail = must(
-      document.renderTail,
-      `The "_document" module is missing the "renderTail" export`
-    );
-
-    const helmetContext = {};
     const { key, params } = route;
     const serverSideContext: ServerSideContext<C> = {
       key,
@@ -280,50 +271,94 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       context,
       params,
     };
-    const loader = getLoader(server, serverSideContext);
 
-    const Component = must(
-      page.default,
-      `The page for "${route.key}" module is missing a default export`
-    );
-
-    if (route === notFoundRoute) {
-      if (method === "GET") {
-        const serverSideProps = await getServerSideProps(
-          server,
-          serverSideContext
-        );
-
-        return render(<Component />, 404, {
-          route,
-          helmetContext,
-          serverSideProps,
-          loader,
-          renderHead,
-          renderTail,
-          formData: undefined,
-        });
+    async function next() {
+      // Treat missing client-side pages as a 404.
+      if (!page) {
+        return {
+          status: 404,
+          headers: new Map(),
+          body: undefined,
+        };
       }
 
-      return {
-        status: 404,
-        headers: new Map(),
-        body: undefined,
-      };
-    }
+      // Assert rendering is available for everything else.
+      const App = must(
+        app.default,
+        `The "_app" module is missing a default export`
+      );
+      const Component = must(
+        page.default,
+        `The page for "${route.key}" module is missing a default export`
+      );
+      const renderHead = must(
+        document.renderHead,
+        `The "_document" module is missing the "renderHead" export`
+      );
+      const renderTail = must(
+        document.renderTail,
+        `The "_document" module is missing the "renderTail" export`
+      );
 
-    const App = must(
-      app.default,
-      `The "_app" module is missing a default export`
-    );
+      // Render 404 pages without the `<App />` component.
+      if (route === notFoundRoute) {
+        if (method === "GET") {
+          const serverSideProps = await server.getServerSideProps?.(
+            serverSideContext
+          );
 
-    if (method === "POST" && typeof server.form === "function") {
-      if (
-        FORM_CONTENT_TYPE_RE.test(request.headers.get("content-type") ?? "")
-      ) {
-        const formData = await server.form(serverSideContext);
-        const serverSideProps = await getServerSideProps(
-          server,
+          return render(<Component />, 404, {
+            route,
+            helmetContext: {},
+            serverSideProps,
+            renderHead,
+            renderTail,
+            formData: undefined,
+          });
+        }
+
+        return {
+          status: 404,
+          headers: new Map(),
+          body: undefined,
+        };
+      }
+
+      // Render POST with `onSubmit` as if it was a GET request.
+      if (method === "POST" && typeof server.onSubmit === "function") {
+        if (
+          FORM_CONTENT_TYPE_RE.test(request.headers.get("content-type") ?? "")
+        ) {
+          const formData = await server.onSubmit(serverSideContext);
+          const serverSideProps = await server.getServerSideProps?.(
+            serverSideContext
+          );
+
+          return render(
+            <App>
+              <Component />
+            </App>,
+            200,
+            {
+              route,
+              helmetContext: {},
+              serverSideProps,
+              renderHead,
+              renderTail,
+              formData,
+            }
+          );
+        }
+
+        return {
+          status: 415,
+          headers: new Map(),
+          body: undefined,
+        };
+      }
+
+      if (method === "GET") {
+        const serverSideProps = await server.getServerSideProps?.(
           serverSideContext
         );
 
@@ -334,63 +369,29 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
           200,
           {
             route,
-            helmetContext,
+            helmetContext: {},
             serverSideProps,
-            loader,
-            formData,
             renderHead,
             renderTail,
+            formData: undefined,
           }
         );
       }
 
       return {
-        status: 415,
-        headers: new Map(),
+        status: 405,
+        headers: new Map([["allow", generateAllowHeader(server)]]),
         body: undefined,
       };
     }
 
-    if (method === "GET") {
-      // Handle loader requests as JSON responses.
-      if (request.search.get("__site__") === "1") {
-        const args = request.search.getAll("data").map((x) => JSON.parse(x));
-        const data = await loader(...args);
-
-        return {
-          status: 200,
-          headers: new Map([["content-type", "application/json"]]),
-          body: JSON.stringify(data),
-        };
-      }
-
-      const serverSideProps = await getServerSideProps(
-        server,
-        serverSideContext
-      );
-
-      return render(
-        <App>
-          <Component />
-        </App>,
-        200,
-        {
-          route,
-          helmetContext,
-          serverSideProps,
-          loader,
-          renderHead,
-          renderTail,
-          formData: undefined,
-        }
-      );
+    // Process using `onRequest` first when exists.
+    if (server.onRequest && method in server.onRequest) {
+      const handler = server.onRequest[method];
+      return handler(serverSideContext, next);
     }
 
-    return {
-      status: 405,
-      headers: new Map([["allow", generateAllowHeader(server)]]),
-      body: undefined,
-    };
+    return next();
   };
 }
 
@@ -398,36 +399,17 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
  * Generate the list of allowed methods for unknown request types.
  */
 function generateAllowHeader<C>(server: PageServerModule<C>): string {
-  const allow = ["GET"];
-  if (typeof server.form === "function") allow.push("POST");
-  return allow.join(",");
-}
+  const allow = new Set(["GET"]);
 
-/**
- * Get the data loader for the current route.
- */
-function getLoader<C>(
-  server: PageServerModule<C>,
-  context: ServerSideContext<C>
-): DataLoaderValue {
-  const serverLoader =
-    server.loader ??
-    typeError(`Missing a data loader implementation: ${context.key}`);
-  return async (...args) => serverLoader(context, ...args);
-}
+  // POST requests are implicitly allowed with `onSubmit` handler.
+  if (typeof server.onSubmit === "function") allow.add("POST");
 
-/**
- * Get the server-side props for the current route.
- */
-async function getServerSideProps<C>(
-  server: PageServerModule<C>,
-  context: ServerSideContext<C>
-) {
-  return (
-    (await server.getServerSideProps?.(context)) ?? {
-      props: {},
-    }
-  );
+  // Existence of a pre-processing method implies the method is allowed.
+  if (typeof server.onRequest === "object") {
+    for (const key of Object.keys(server.onRequest)) allow.add(key);
+  }
+
+  return Array.from(allow).join(",");
 }
 
 type Loader<T> = () => T | Promise<T>;
@@ -437,8 +419,8 @@ type Loader<T> = () => T | Promise<T>;
  */
 type Route<C> = {
   key: string;
-  module: Loader<PageModule>;
-  serverModule: Loader<PageServerModule<C>>;
+  module: Loader<PageModule | undefined>;
+  serverModule: Loader<PageServerModule<C> | undefined>;
   scripts: string[];
   css: string[];
   params: ReadonlyMap<string, string>;
@@ -457,7 +439,7 @@ function createPageRouter<C>(
           key,
           {
             module: fn(contents.module),
-            serverModule: fn(contents.serverModule ?? {}),
+            serverModule: fn(contents.serverModule),
             scripts: contents.scripts ?? [],
             css: contents.css ?? [],
           },
@@ -483,9 +465,8 @@ function createPageRouter<C>(
 interface RenderContext<C> {
   route: Route<C>;
   helmetContext: {};
-  loader: DataLoaderValue;
   formData: object | undefined;
-  serverSideProps: ServerSideProps<{}> | undefined;
+  serverSideProps: ServerSideProps<{}> | null | undefined;
   renderHead: (options: HeadOptions) => string;
   renderTail: (options: TailOptions) => string;
 }
@@ -498,19 +479,18 @@ async function render<C>(
   initialStatus: number,
   context: RenderContext<C>
 ): Promise<Response> {
-  const { redirect, status } = context.serverSideProps ?? {};
+  const serverSideProps = context.serverSideProps ?? { props: {} };
 
   // Skip rendering props when `redirect` is returned.
-  if (redirect) {
-    return {
-      status: status ?? 302,
-      headers: new Map([["location", redirect.url]]),
-      body: undefined,
-    };
+  if (serverSideProps.redirect) {
+    return redirect(
+      serverSideProps.redirect.url,
+      serverSideProps.status ?? 302
+    );
   }
 
   return {
-    status: status ?? initialStatus,
+    status: serverSideProps.status ?? initialStatus,
     headers: new Map([["content-type", "text/html"]]),
     body: new ReactBody(element, context),
   };
@@ -530,7 +510,7 @@ function decode(value: string): string {
 /**
  * Turn value into function, but keep existing function as a function.
  */
-function fn<T extends object>(value: T | (() => T)): () => T {
+function fn<T>(value: T | (() => T)): () => T {
   return typeof value === "function" ? (value as () => T) : () => value;
 }
 
@@ -549,23 +529,20 @@ class ReactBody<C> implements Body {
   constructor(private page: JSX.Element, private context: RenderContext<C>) {}
 
   private getApp() {
-    const pageData: PageData = {
-      props: this.context.serverSideProps?.props ?? {},
-      formData: this.context.formData,
-    };
+    const { formData } = this.context;
+    const { props = {}, hydrate = true } = this.context.serverSideProps ?? {};
+    const pageData: PageData = { props, formData };
 
     const app = (
       <HelmetProvider context={this.context.helmetContext}>
         <PageDataContext.Provider value={pageData}>
-          <DataLoaderContext.Provider value={this.context.loader}>
-            {this.page}
-          </DataLoaderContext.Provider>
+          {this.page}
         </PageDataContext.Provider>
       </HelmetProvider>
     );
 
     const { scripts } = this.context.route;
-    const renderOptions = scripts.length
+    const renderOptions = hydrate
       ? {
           bootstrapModules: scripts,
           bootstrapScriptContent: `window.__DATA__=${JSON.stringify(pageData)}`,
@@ -691,4 +668,26 @@ class ReactBody<C> implements Body {
     stream.pipe(proxy);
     return proxy;
   }
+}
+
+/**
+ * Format JSON as response.
+ */
+export function json(json: unknown, status = 200): Response {
+  return {
+    status,
+    headers: new Map([["content-type", "application/json"]]),
+    body: JSON.stringify(json),
+  };
+}
+
+/**
+ * Format redirect as a response.
+ */
+export function redirect(location: string, status = 302): Response {
+  return {
+    status,
+    headers: new Map([["location", location]]),
+    body: undefined,
+  };
 }
