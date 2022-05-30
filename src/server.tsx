@@ -338,15 +338,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
 
     // Process using `onRequest` first when the method exists.
     const handler = onRequest[method];
-    if (handler) {
-      return handler(ctx, () =>
-        Promise.resolve({
-          status: 415,
-          headers: new Map(),
-          body: undefined,
-        })
-      );
-    }
+    if (handler) return handler(ctx, finalHandler);
 
     // Render any GET requests to pages that exist.
     if (method === "GET" && page.default) {
@@ -365,11 +357,18 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
       };
     }
 
-    return {
-      status: 404,
-      headers: new Map(),
-      body: undefined,
-    };
+    return finalHandler();
+  };
+}
+
+/**
+ * Generic final handler for all requests.
+ */
+async function finalHandler(): Promise<Response> {
+  return {
+    status: 404,
+    headers: new Map(),
+    body: undefined,
   };
 }
 
@@ -642,12 +641,18 @@ export type OnFormSubmitHandler<C> = (
 export function onFormSubmit<C>(
   process: OnFormSubmitHandler<C>
 ): OnRequestHandler<C> {
-  return async function formHandler(ctx, next) {
+  return async function formHandler(ctx) {
     const type = ctx.request.headers.get("content-type") ?? "";
+
     if (FORM_CONTENT_TYPE_RE.test(type)) {
       ctx.formData = await process(ctx);
       return ctx.render();
     }
-    return next();
+
+    return {
+      status: 415,
+      headers: new Map(),
+      body: undefined,
+    };
   };
 }
