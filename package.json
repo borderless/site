@@ -29,7 +29,7 @@
     "./dev": "./dist/dev.js",
     "./document": "./dist/document.js",
     "./head": "./dist/head.js",
-    "./render": "./dist/render.js"
+    "./server": "./dist/server.js"
   },
   "engines": {
     "node": ">=14"

@@ -1,4 +1,4 @@
-import type { ServerSideContext } from "@borderless/site/render";
+import type { ServerSideContext } from "@borderless/site/server";
 
 export default function NotFound() {
   return <>An example of a custom 404 page.</>;

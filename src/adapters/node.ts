@@ -5,7 +5,7 @@ import type {
 } from "node:http";
 import { URLSearchParams } from "node:url";
 import getRawBody from "raw-body";
-import { Request, Server, StreamOptions } from "../render.js";
+import { Request, Server, StreamOptions } from "../server.js";
 
 /**
  * Node.js compatible version of the `Headers`.

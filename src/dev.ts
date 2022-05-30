@@ -17,7 +17,7 @@ import type {
   DocumentModule,
   ServerPage,
   ServerFile,
-} from "./render.js";
+} from "./server.js";
 import type { RollupOutput, OutputChunk } from "rollup";
 import { createHandler, Handler } from "./adapters/node.js";
 
@@ -34,7 +34,7 @@ const EXTENSIONS = ["js", "jsx", "ts", "tsx"];
  * Path to import default `App` for client-side rendering.
  */
 const SITE_COMPONENT_APP_IMPORT_NAME = "@borderless/site/app";
-const SITE_RENDER_IMPORT_NAME = "@borderless/site/render";
+const SITE_SERVER_IMPORT_NAME = "@borderless/site/server";
 const SITE_CLIENT_IMPORT_NAME = "@borderless/site/client";
 
 /**
@@ -138,7 +138,7 @@ function buildServerScript(
   };
 
   return [
-    `import { createServer } from ${JSON.stringify(SITE_RENDER_IMPORT_NAME)};`,
+    `import { createServer } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
     ``,
     `export const server = createServer({`,
     `  pages: ${stringifyPages(files.pages)},`,
@@ -151,7 +151,7 @@ function buildServerScript(
 
 function buildServerDts() {
   return [
-    `import { Server } from ${JSON.stringify(SITE_RENDER_IMPORT_NAME)};`,
+    `import { Server } from ${JSON.stringify(SITE_SERVER_IMPORT_NAME)};`,
     ``,
     `export declare const server: Server<unknown>;`,
   ].join("\n");
@@ -440,8 +440,8 @@ export async function dev(options: DevOptions): Promise<RequestListener> {
 
   // Must use the same loader for all dependencies to ensure shared modules.
   const siteServer = (await vite.ssrLoadModule(
-    SITE_RENDER_IMPORT_NAME
-  )) as typeof import("./render.js");
+    SITE_SERVER_IMPORT_NAME
+  )) as typeof import("./server.js");
 
   function loadServerModule<T>(path: string): ServerFile<T> {
     return { module: load<T>(vite, path) };
