@@ -23,7 +23,7 @@ import { createHandler, Handler } from "./adapters/node.js";
 
 const DEFAULT_PUBLIC_DIR = "public";
 const DEFAULT_CLIENT_TARGET = "modules";
-const DEFAULT_SERVER_TARGET = "es2019";
+const DEFAULT_SERVER_TARGET = "es2020";
 
 /**
  * Support entry point file extensions.
@@ -355,7 +355,7 @@ export async function build(options: BuildOptions): Promise<undefined> {
           ],
         },
         outDir: serverOutDir,
-        ssr: true,
+        ssr: SITE_SERVER_MODULE_ID,
       },
       optimizeDeps: {
         include: [],

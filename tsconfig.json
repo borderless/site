@@ -4,7 +4,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "moduleResolution": "Node",
-    "types": ["node", "vite/client"],
+    "types": ["node", "vite/client", "@cloudflare/workers-types"],
     "jsx": "react"
   },
   "include": ["./src/**/*"]

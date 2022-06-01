@@ -1,5 +1,3 @@
-/// <reference lib="webworker" />
-
 import React from "react";
 import * as ReactDOM from "react-dom/server";
 import { zip, map } from "iterative";
@@ -270,19 +268,19 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
 
     async function render() {
       // Assert rendering is available for everything else.
-      const App = must(
+      const App = has(
         app.default,
         `The "_app" module is missing a default export`
       );
-      const Component = must(
+      const Component = has(
         page.default,
         `The page for "${route.key}" module is missing a default export`
       );
-      const renderHead = must(
+      const renderHead = has(
         document.renderHead,
         `The "_document" module is missing the "renderHead" export`
       );
-      const renderTail = must(
+      const renderTail = has(
         document.renderTail,
         `The "_document" module is missing the "renderTail" export`
       );
@@ -313,7 +311,7 @@ export function createServer<C>(options: ServerOptions<C>): Server<C> {
         scripts,
       };
 
-      // The 404 route should not render in an application wrapper.
+      // The 404 route should not render in the application wrapper.
       if (route === notFoundRoute) {
         return {
           status: serverSideProps.status ?? 404,
@@ -453,7 +451,7 @@ function fn<T>(value: T | (() => T)): () => T {
 /**
  * Asserts that a value is defined.
  */
-function must<T>(value: T | null | undefined, message: string): T {
+function has<T>(value: T | null | undefined, message: string): T {
   if (value == null) throw new TypeError(message);
   return value;
 }
@@ -609,7 +607,7 @@ class ReactBody<C> implements Body {
 export function json(json: unknown, status = 200): Response {
   return {
     status,
-    headers: new Map([["content-type", "application/json"]]),
+    headers: new Map([["Content-Type", "application/json"]]),
     body: JSON.stringify(json),
   };
 }
@@ -620,7 +618,7 @@ export function json(json: unknown, status = 200): Response {
 export function redirect(location: string, status = 302): Response {
   return {
     status,
-    headers: new Map([["location", location]]),
+    headers: new Map([["Location", location]]),
     body: undefined,
   };
 }

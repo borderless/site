@@ -1,5 +1,4 @@
 name = "site-example"
-type = "webpack"
 
 workers_dev = true
 compatibility_date = "2022-05-05"

@@ -4,16 +4,17 @@
   "scripts": {
     "build": "site build",
     "dev": "site dev",
-    "start": "node --loader ts-node/esm index.ts",
-    "wrangler:dev": "wrangler dev",
+    "start": "tsx index.ts",
+    "wrangler:dev": "wrangler dev ./worker.js",
     "wrangler:login": "wrangler login"
   },
   "dependencies": {
     "@borderless/site": "file:../..",
-    "@cloudflare/wrangler": "^1.19.12"
+    "wrangler": "^2.0.7"
   },
   "devDependencies": {
     "@types/express": "^4.17.12",
-    "express": "^4.17.1"
+    "express": "^4.17.1",
+    "tsx": "^3.4.2"
   }
 }

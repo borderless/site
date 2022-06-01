@@ -1,4 +1,3 @@
-import { setTimeout } from "timers/promises";
 import { onFormSubmit } from "@borderless/site/server";
 
 const DELAY = 2000;
@@ -10,7 +9,6 @@ const items = [
 ];
 
 export async function getServerSideProps(ctx) {
-  await setTimeout(DELAY);
   return { props: items };
 }
 
