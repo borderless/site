@@ -307,22 +307,27 @@ export async function build(options: BuildOptions): Promise<undefined> {
 
   if (files.notFound) pagePaths.push(files.notFound);
 
-  const clientResult = (await buildVite({
-    ...DEFAULT_VITE_CONFIG,
-    root,
-    base,
-    mode: "production",
-    publicDir: false,
-    plugins: [sitePagePlugin("production", () => files.app)],
-    build: {
-      target: client.target ?? DEFAULT_CLIENT_TARGET,
-      sourcemap: options.sourceMap,
-      rollupOptions: {
-        input: pagePaths.map((x) => vitePageEntry(options.root, x.path ?? "")),
+  const [clientResult, hasPublicDir] = await Promise.all([
+    buildVite({
+      ...DEFAULT_VITE_CONFIG,
+      root,
+      base,
+      mode: "production",
+      publicDir: false,
+      plugins: [sitePagePlugin("production", () => files.app)],
+      build: {
+        target: client.target ?? DEFAULT_CLIENT_TARGET,
+        sourcemap: options.sourceMap,
+        rollupOptions: {
+          input: pagePaths.map((x) =>
+            vitePageEntry(options.root, x.path ?? "")
+          ),
+        },
+        outDir: clientOutDir,
       },
-      outDir: clientOutDir,
-    },
-  })) as RollupOutput;
+    }) as Promise<RollupOutput>,
+    isDirectory(publicDir),
+  ]);
 
   const [serverResult] = await Promise.all([
     (await buildVite({
@@ -362,12 +367,14 @@ export async function build(options: BuildOptions): Promise<undefined> {
       },
     })) as RollupOutput,
     // Copy all files from the public directory and track them for output into server bundle.
-    copyDir(
-      publicDir,
-      clientOutDir,
-      (fileName) =>
-        !!publicAssets.push(normalizePath(relative(publicDir, fileName)))
-    ),
+    hasPublicDir
+      ? copyDir(
+          publicDir,
+          clientOutDir,
+          (fileName) =>
+            !!publicAssets.push(normalizePath(relative(publicDir, fileName)))
+        )
+      : undefined,
   ]);
 
   const serverOutput = serverResult.output.find(
@@ -544,5 +551,16 @@ async function copyDir(
       const shouldCopy = onFile(srcFile);
       if (shouldCopy) await copyFile(srcFile, destFile);
     }
+  }
+}
+
+/**
+ * Quickly check if the path is a directory.
+ */
+async function isDirectory(path: string) {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
   }
 }
