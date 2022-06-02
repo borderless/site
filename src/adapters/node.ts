@@ -4,6 +4,7 @@ import type {
   ServerResponse,
 } from "node:http";
 import { URLSearchParams } from "node:url";
+import { PassThrough } from "node:stream";
 import getRawBody from "raw-body";
 import { Request, Headers, Server, StreamOptions } from "../server.js";
 
@@ -31,13 +32,23 @@ export function createHandler<C>(
 ): Handler {
   return function handler(req, res, next) {
     server(new NodeRequest(req), getContext(req, res))
-      .then((response) => {
+      .then(async (response) => {
         res.statusCode = response.status;
         for (const [key, value] of response.headers) {
           res.setHeader(key, value);
         }
         if (typeof response.body === "object") {
-          response.body.nodeStream(options).then((x) => x.pipe(res), next);
+          const { prefix, suffix, stream } = await response.body.nodeStream(
+            options
+          );
+          const proxy = new PassThrough({
+            flush(cb) {
+              return cb(null, suffix());
+            },
+          });
+          proxy.write(prefix());
+          stream.pipe(proxy);
+          proxy.pipe(res, { end: false });
         } else {
           res.end(response.body);
         }

@@ -3,7 +3,6 @@ import * as ReactDOM from "react-dom/server";
 import { zip, map } from "iterative";
 import { createRouter } from "@borderless/router";
 import { FilledContext, HelmetProvider } from "react-helmet-async";
-import { PassThrough } from "stream";
 import { PageData, PageDataContext } from "./shared.js";
 import type { AppProps } from "./app.js";
 import type { HeadOptions, TailOptions } from "./document.js";
@@ -75,13 +74,6 @@ export type GetServerSideProps<P, C> = (
 ) => ServerSideProps<P> | undefined | null;
 
 /**
- * Generic node.js stream support in the API.
- */
-export interface NodeStream {
-  pipe<Writable extends NodeJS.WritableStream>(destination: Writable): Writable;
-}
-
-/**
  * Stream rendering options.
  */
 export interface StreamOptions {
@@ -95,7 +87,7 @@ export interface StreamOptions {
 /**
  * Raw node.js stream result.
  */
-export interface RawNodeStream {
+export interface NodeStream {
   prefix: () => string;
   suffix: () => string;
   stream: ReactDOM.PipeableStream;
@@ -104,7 +96,7 @@ export interface RawNodeStream {
 /**
  * Raw web stream result.
  */
-export interface RawReadableStream {
+export interface ReadableStream {
   prefix: () => Uint8Array;
   suffix: () => Uint8Array;
   stream: ReactDOM.ReactDOMServerReadableStream;
@@ -114,9 +106,7 @@ export interface RawReadableStream {
  * Supported body interfaces.
  */
 export interface Body {
-  rawNodeStream(options?: StreamOptions): Promise<RawNodeStream>;
   nodeStream(options?: StreamOptions): Promise<NodeStream>;
-  rawReadableStream(options?: StreamOptions): Promise<RawReadableStream>;
   readableStream(options?: StreamOptions): Promise<ReadableStream>;
 }
 
@@ -462,7 +452,7 @@ function has<T>(value: T | null | undefined, message: string): T {
 class ReactBody<C> implements Body {
   constructor(private page: JSX.Element, private context: RenderContext<C>) {}
 
-  private getApp() {
+  private render() {
     const { hydrate, pageData, helmetContext, scripts } = this.context;
 
     const app = (
@@ -512,11 +502,9 @@ class ReactBody<C> implements Body {
     return this.context.renderTail({ tail });
   }
 
-  async rawReadableStream(
-    options: StreamOptions = {}
-  ): Promise<RawReadableStream> {
+  async readableStream(options: StreamOptions = {}): Promise<ReadableStream> {
     const { signal, onError, waitForAllReady, head = "", tail = "" } = options;
-    const { app, renderOptions } = this.getApp();
+    const { app, renderOptions } = this.render();
     const encoder = new TextEncoder();
 
     const stream = await ReactDOM.renderToReadableStream(app, {
@@ -534,24 +522,7 @@ class ReactBody<C> implements Body {
     };
   }
 
-  async readableStream(options: StreamOptions = {}): Promise<ReadableStream> {
-    const { prefix, suffix, stream } = await this.rawReadableStream(options);
-    const { readable, writable } = new TransformStream();
-
-    const write = (text: Uint8Array) => {
-      const writer = writable.getWriter();
-      return writer.write(text).then(() => writer.releaseLock());
-    };
-
-    write(prefix())
-      .then(() => stream.pipeTo(writable, { preventClose: true }))
-      .then(() => write(suffix()).then(() => writable.close()))
-      .catch(options.onError);
-
-    return readable;
-  }
-
-  rawNodeStream(options: StreamOptions = {}): Promise<RawNodeStream> {
+  nodeStream(options: StreamOptions = {}): Promise<NodeStream> {
     const { signal, onError, waitForAllReady, head = "", tail = "" } = options;
 
     return new Promise((resolve, reject) => {
@@ -574,7 +545,7 @@ class ReactBody<C> implements Body {
         return reject(err);
       };
 
-      const { app, renderOptions } = this.getApp();
+      const { app, renderOptions } = this.render();
       const stream = ReactDOM.renderToPipeableStream(app, {
         onAllReady,
         onError,
@@ -586,18 +557,6 @@ class ReactBody<C> implements Body {
       const onAbort = () => stream.abort();
       signal?.addEventListener("abort", onAbort);
     });
-  }
-
-  async nodeStream(options: StreamOptions = {}): Promise<NodeStream> {
-    const { prefix, suffix, stream } = await this.rawNodeStream(options);
-    const proxy = new PassThrough({
-      flush(cb) {
-        return cb(null, suffix());
-      },
-    });
-    proxy.write(prefix());
-    stream.pipe(proxy);
-    return proxy;
   }
 }
 

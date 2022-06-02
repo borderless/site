@@ -1,6 +1,7 @@
 import {
   Request as SiteRequest,
   Headers as SiteHeaders,
+  FormParams as SiteFormParams,
   Server,
   StreamOptions,
 } from "../server.js";
@@ -24,16 +25,30 @@ export function createHandler<C>(
   options?: StreamOptions
 ): Handler {
   return async function handler(req) {
-    const url = new URL(req.url);
-
     const res = await server(new WorkerRequest(req), getContext(req));
-    const body =
-      typeof res.body === "object" ? await res.body.readableStream() : res.body;
 
-    return new Response(body, {
+    const init = {
       status: res.status,
       headers: Array.from(res.headers.entries()),
-    });
+    };
+
+    if (typeof res.body === "object") {
+      const { prefix, suffix, stream } = await res.body.readableStream(options);
+      const { readable, writable } = new TransformStream();
+
+      const write = (text: Uint8Array) => {
+        const writer = writable.getWriter();
+        return writer.write(text).then(() => writer.releaseLock());
+      };
+
+      write(prefix())
+        .then(() => stream.pipeTo(writable, { preventClose: true }))
+        .then(() => write(suffix()).then(() => writable.close()));
+
+      return new Response(readable, init);
+    }
+
+    return new Response(res.body, init);
   };
 }
 
@@ -50,6 +65,25 @@ class WorkerHeaders implements SiteHeaders {
 
   has(name: string) {
     return this.headers.has(name);
+  }
+}
+
+class WorkerForm implements SiteFormParams {
+  constructor(private formData: FormData) {}
+
+  get(name: string) {
+    const value = this.formData.get(name);
+    if (typeof value === "string") return value;
+    return null;
+  }
+
+  getAll(name: string) {
+    const values = this.formData.getAll(name);
+    return values.filter((value): value is string => typeof value === "string");
+  }
+
+  has(name: string) {
+    return this.formData.has(name);
   }
 }
 
@@ -70,8 +104,8 @@ class WorkerRequest implements SiteRequest {
     return this.req.arrayBuffer();
   }
 
-  form() {
-    return this.req.text().then((value) => new URLSearchParams(value));
+  async form() {
+    return new WorkerForm(await this.req.formData());
   }
 
   json() {
